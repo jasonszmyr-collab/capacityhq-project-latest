@@ -1,0 +1,227 @@
+/**
+ * Compliance Rules Service
+ * Manages flag position requirements from local, state, and federal levels
+ * Implements priority hierarchy: Half-mast > Federal > State > Local
+ */
+
+import { FlagPosition } from './flagApi';
+
+export type ComplianceLevel = 'federal' | 'state' | 'local' | 'half_mast';
+export type ComplianceAction = 'required' | 'recommended' | 'allowed';
+
+export interface ComplianceRule {
+  id: string;
+  level: ComplianceLevel;
+  position: FlagPosition;
+  action: ComplianceAction;
+  reason: string;
+  startDate?: Date;
+  endDate?: Date;
+  active: boolean;
+  source?: string; // e.g., "Presidential Proclamation", "State Governor Order"
+}
+
+export interface ComplianceResult {
+  allowed: boolean;
+  requiredPosition: FlagPosition | null;
+  blockingRule?: ComplianceRule;
+  applicableRules: ComplianceRule[];
+  reason: string;
+}
+
+/**
+ * Compliance Rules Manager
+ * Device firmware should use this logic to enforce flag position compliance
+ */
+export class ComplianceRulesManager {
+  private rules: ComplianceRule[] = [];
+
+  constructor() {
+    // Initialize with sample rules (in production, these would come from a database)
+    this.initializeSampleRules();
+  }
+
+  private initializeSampleRules() {
+    // Sample rules - replace with actual data source
+    this.rules = [
+      // Example: Federal half-mast directive
+      // {
+      //   id: 'federal-half-mast-2024',
+      //   level: 'half_mast',
+      //   position: 'half',
+      //   action: 'required',
+      //   reason: 'Presidential proclamation for national day of mourning',
+      //   startDate: new Date('2024-01-01'),
+      //   endDate: new Date('2024-01-03'),
+      //   active: true,
+      //   source: 'Presidential Proclamation'
+      // }
+    ];
+  }
+
+  /**
+   * Add a new compliance rule
+   */
+  addRule(rule: ComplianceRule): void {
+    this.rules.push(rule);
+  }
+
+  /**
+   * Remove a compliance rule by ID
+   */
+  removeRule(ruleId: string): void {
+    this.rules = this.rules.filter(rule => rule.id !== ruleId);
+  }
+
+  /**
+   * Get all active rules for the current date/time
+   */
+  getActiveRules(date: Date = new Date()): ComplianceRule[] {
+    return this.rules.filter(rule => {
+      if (!rule.active) return false;
+
+      // Check date range if specified
+      if (rule.startDate && date < rule.startDate) return false;
+      if (rule.endDate && date > rule.endDate) return false;
+
+      return true;
+    });
+  }
+
+  /**
+   * Check if a requested position complies with all rules
+   * Returns compliance result with blocking rule if any
+   *
+   * Priority hierarchy:
+   * 1. Half-mast directives (highest priority)
+   * 2. Federal requirements
+   * 3. State requirements
+   * 4. Local requirements
+   */
+  checkCompliance(requestedPosition: FlagPosition, date: Date = new Date()): ComplianceResult {
+    const activeRules = this.getActiveRules(date);
+
+    // Sort rules by priority
+    const sortedRules = this.sortRulesByPriority(activeRules);
+
+    // Find the highest priority required rule
+    const requiredRule = sortedRules.find(rule => rule.action === 'required');
+
+    if (requiredRule) {
+      // There is a required position
+      if (requestedPosition !== requiredRule.position && requestedPosition !== 'auto') {
+        // Request conflicts with requirement
+        return {
+          allowed: false,
+          requiredPosition: requiredRule.position,
+          blockingRule: requiredRule,
+          applicableRules: sortedRules,
+          reason: `${this.getLevelName(requiredRule.level)} requires ${requiredRule.position} position. ${requiredRule.reason}`
+        };
+      }
+
+      // Request complies or is auto
+      return {
+        allowed: true,
+        requiredPosition: requiredRule.position,
+        applicableRules: sortedRules,
+        reason: `Request complies with ${this.getLevelName(requiredRule.level)} requirement: ${requiredRule.reason}`
+      };
+    }
+
+    // No required rules, check recommended
+    const recommendedRules = sortedRules.filter(rule => rule.action === 'recommended');
+
+    if (recommendedRules.length > 0) {
+      const topRecommendation = recommendedRules[0];
+      return {
+        allowed: true,
+        requiredPosition: null,
+        applicableRules: sortedRules,
+        reason: recommendedRules.length > 0
+          ? `No requirements active. ${this.getLevelName(topRecommendation.level)} recommends ${topRecommendation.position}: ${topRecommendation.reason}`
+          : 'No active requirements or recommendations.'
+      };
+    }
+
+    // No rules active
+    return {
+      allowed: true,
+      requiredPosition: null,
+      applicableRules: [],
+      reason: 'No active compliance requirements.'
+    };
+  }
+
+  /**
+   * Get the enforced position based on current rules
+   * Returns the highest priority required position, or null if none
+   */
+  getEnforcedPosition(date: Date = new Date()): FlagPosition | null {
+    const activeRules = this.getActiveRules(date);
+    const sortedRules = this.sortRulesByPriority(activeRules);
+    const requiredRule = sortedRules.find(rule => rule.action === 'required');
+
+    return requiredRule ? requiredRule.position : null;
+  }
+
+  /**
+   * Sort rules by priority (highest first)
+   * Priority: half_mast > federal > state > local
+   */
+  private sortRulesByPriority(rules: ComplianceRule[]): ComplianceRule[] {
+    const priorityMap: Record<ComplianceLevel, number> = {
+      half_mast: 4,
+      federal: 3,
+      state: 2,
+      local: 1
+    };
+
+    return [...rules].sort((a, b) => {
+      // First sort by priority level
+      const priorityDiff = priorityMap[b.level] - priorityMap[a.level];
+      if (priorityDiff !== 0) return priorityDiff;
+
+      // Then by action (required > recommended > allowed)
+      const actionMap = { required: 3, recommended: 2, allowed: 1 };
+      return actionMap[b.action] - actionMap[a.action];
+    });
+  }
+
+  /**
+   * Get human-readable level name
+   */
+  private getLevelName(level: ComplianceLevel): string {
+    switch (level) {
+      case 'half_mast':
+        return 'Half-mast directive';
+      case 'federal':
+        return 'Federal requirement';
+      case 'state':
+        return 'State requirement';
+      case 'local':
+        return 'Local requirement';
+    }
+  }
+
+  /**
+   * Get all rules
+   */
+  getAllRules(): ComplianceRule[] {
+    return [...this.rules];
+  }
+
+  /**
+   * Update an existing rule
+   */
+  updateRule(ruleId: string, updates: Partial<ComplianceRule>): boolean {
+    const index = this.rules.findIndex(rule => rule.id === ruleId);
+    if (index === -1) return false;
+
+    this.rules[index] = { ...this.rules[index], ...updates };
+    return true;
+  }
+}
+
+// Singleton instance for app-wide use
+export const complianceManager = new ComplianceRulesManager();

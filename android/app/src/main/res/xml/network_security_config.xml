@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+
+    <!-- Allow ALL local network traffic -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">192.168.0.0</domain>
+        <domain includeSubdomains="true">192.168.1.0</domain>
+        <domain includeSubdomains="true">192.168.10.32</domain>
+    </domain-config>
+
+    <!-- Allow everything (dev mode) -->
+    <base-config cleartextTrafficPermitted="true" />
+
+</network-security-config>

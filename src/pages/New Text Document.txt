@@ -1,0 +1,31 @@
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import AppHeader from "../components/AppHeader";
+import { wifiService } from "../services/WiFiService"; // adjust path if needed :contentReference[oaicite:0]{index=0}
+
+export default function WifiScan() {
+  const [networks, setNetworks] = useState([]);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    wifiService.scanNetworks().then(setNetworks);
+  }, []);
+
+  return (
+    <div className="pt-20 px-6 text-white">
+      <AppHeader title="Scan Networks" />
+
+      <div className="mt-6 space-y-3">
+        {networks.map((net: any) => (
+          <button
+            key={net.ssid}
+            onClick={() => navigate("/wifi/connect", { state: net })}
+            className="w-full py-3 bg-white/10 rounded-xl"
+          >
+            {net.ssid} ({net.signal}%)
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}

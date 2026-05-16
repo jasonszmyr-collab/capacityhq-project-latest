@@ -1,0 +1,366 @@
+/**
+ * Test suite for compliance rules checking
+ */
+
+import {
+  ComplianceRulesManager,
+  type ComplianceRule,
+} from '../complianceRules';
+
+describe('ComplianceRulesManager', () => {
+  let manager: ComplianceRulesManager;
+
+  beforeEach(() => {
+    manager = new ComplianceRulesManager();
+  });
+
+  describe('Priority Hierarchy', () => {
+    test('half-mast directive overrides federal requirement', () => {
+      const testDate = new Date('2024-06-01T12:00:00Z');
+
+      // Add federal requirement for full staff
+      manager.addRule({
+        id: 'federal-holiday',
+        level: 'federal',
+        position: 'full',
+        action: 'required',
+        reason: 'Federal holiday - Independence Day',
+        startDate: new Date('2024-06-01T00:00:00Z'),
+        endDate: new Date('2024-06-01T23:59:59Z'),
+        active: true,
+      });
+
+      // Add half-mast directive
+      manager.addRule({
+        id: 'half-mast-mourning',
+        level: 'half_mast',
+        position: 'half',
+        action: 'required',
+        reason: 'Presidential proclamation for national day of mourning',
+        startDate: new Date('2024-06-01T00:00:00Z'),
+        endDate: new Date('2024-06-01T23:59:59Z'),
+        active: true,
+      });
+
+      // User requests full staff
+      const result = manager.checkCompliance('full', testDate);
+
+      // Half-mast should override federal requirement
+      expect(result.allowed).toBe(false);
+      expect(result.requiredPosition).toBe('half');
+      expect(result.blockingRule?.level).toBe('half_mast');
+    });
+
+    test('federal requirement overrides state requirement', () => {
+      const testDate = new Date('2024-06-01T12:00:00Z');
+
+      // Add state requirement
+      manager.addRule({
+        id: 'state-holiday',
+        level: 'state',
+        position: 'down',
+        action: 'required',
+        reason: 'State observance day',
+        startDate: new Date('2024-06-01T00:00:00Z'),
+        endDate: new Date('2024-06-01T23:59:59Z'),
+        active: true,
+      });
+
+      // Add federal requirement
+      manager.addRule({
+        id: 'federal-holiday',
+        level: 'federal',
+        position: 'full',
+        action: 'required',
+        reason: 'Federal holiday',
+        startDate: new Date('2024-06-01T00:00:00Z'),
+        endDate: new Date('2024-06-01T23:59:59Z'),
+        active: true,
+      });
+
+      const result = manager.checkCompliance('down', testDate);
+
+      // Federal should override state
+      expect(result.allowed).toBe(false);
+      expect(result.requiredPosition).toBe('full');
+      expect(result.blockingRule?.level).toBe('federal');
+    });
+
+    test('state requirement overrides local requirement', () => {
+      const testDate = new Date('2024-06-01T12:00:00Z');
+
+      // Add local requirement
+      manager.addRule({
+        id: 'local-ordinance',
+        level: 'local',
+        position: 'full',
+        action: 'required',
+        reason: 'Local ordinance',
+        startDate: new Date('2024-06-01T00:00:00Z'),
+        endDate: new Date('2024-06-01T23:59:59Z'),
+        active: true,
+      });
+
+      // Add state requirement
+      manager.addRule({
+        id: 'state-holiday',
+        level: 'state',
+        position: 'half',
+        action: 'required',
+        reason: 'State holiday',
+        startDate: new Date('2024-06-01T00:00:00Z'),
+        endDate: new Date('2024-06-01T23:59:59Z'),
+        active: true,
+      });
+
+      const result = manager.checkCompliance('full', testDate);
+
+      // State should override local
+      expect(result.allowed).toBe(false);
+      expect(result.requiredPosition).toBe('half');
+      expect(result.blockingRule?.level).toBe('state');
+    });
+  });
+
+  describe('Auto Mode Handling', () => {
+    test('auto mode complies with half-mast requirement', () => {
+      const testDate = new Date('2024-06-01T12:00:00Z');
+
+      manager.addRule({
+        id: 'half-mast-directive',
+        level: 'half_mast',
+        position: 'half',
+        action: 'required',
+        reason: 'National mourning period',
+        startDate: new Date('2024-06-01T00:00:00Z'),
+        endDate: new Date('2024-06-01T23:59:59Z'),
+        active: true,
+      });
+
+      // User requests auto mode
+      const result = manager.checkCompliance('auto', testDate);
+
+      // Auto should comply with requirement
+      expect(result.allowed).toBe(true);
+      expect(result.requiredPosition).toBe('half');
+      expect(result.reason).toContain('Half-mast directive');
+    });
+
+    test('auto mode with no requirements is allowed', () => {
+      const testDate = new Date('2024-06-01T12:00:00Z');
+
+      const result = manager.checkCompliance('auto', testDate);
+
+      expect(result.allowed).toBe(true);
+      expect(result.requiredPosition).toBe(null);
+      expect(result.reason).toContain('No active compliance requirements');
+    });
+  });
+
+  describe('Date Range Validation', () => {
+    test('rule is not active before start date', () => {
+      const testDate = new Date('2024-05-31T23:59:59Z');
+
+      manager.addRule({
+        id: 'future-rule',
+        level: 'federal',
+        position: 'half',
+        action: 'required',
+        reason: 'Future directive',
+        startDate: new Date('2024-06-01T00:00:00Z'),
+        endDate: new Date('2024-06-03T23:59:59Z'),
+        active: true,
+      });
+
+      const result = manager.checkCompliance('full', testDate);
+
+      expect(result.allowed).toBe(true);
+      expect(result.requiredPosition).toBe(null);
+      expect(result.applicableRules.length).toBe(0);
+    });
+
+    test('rule is not active after end date', () => {
+      const testDate = new Date('2024-06-04T00:00:00Z');
+
+      manager.addRule({
+        id: 'past-rule',
+        level: 'federal',
+        position: 'half',
+        action: 'required',
+        reason: 'Expired directive',
+        startDate: new Date('2024-06-01T00:00:00Z'),
+        endDate: new Date('2024-06-03T23:59:59Z'),
+        active: true,
+      });
+
+      const result = manager.checkCompliance('full', testDate);
+
+      expect(result.allowed).toBe(true);
+      expect(result.requiredPosition).toBe(null);
+      expect(result.applicableRules.length).toBe(0);
+    });
+
+    test('rule is active within date range', () => {
+      const testDate = new Date('2024-06-02T12:00:00Z');
+
+      manager.addRule({
+        id: 'active-rule',
+        level: 'federal',
+        position: 'half',
+        action: 'required',
+        reason: 'Active directive',
+        startDate: new Date('2024-06-01T00:00:00Z'),
+        endDate: new Date('2024-06-03T23:59:59Z'),
+        active: true,
+      });
+
+      const result = manager.checkCompliance('full', testDate);
+
+      expect(result.allowed).toBe(false);
+      expect(result.requiredPosition).toBe('half');
+      expect(result.applicableRules.length).toBe(1);
+    });
+  });
+
+  describe('Compliance Checking', () => {
+    test('request matching requirement is allowed', () => {
+      const testDate = new Date('2024-06-01T12:00:00Z');
+
+      manager.addRule({
+        id: 'half-mast',
+        level: 'half_mast',
+        position: 'half',
+        action: 'required',
+        reason: 'National mourning',
+        startDate: new Date('2024-06-01T00:00:00Z'),
+        endDate: new Date('2024-06-01T23:59:59Z'),
+        active: true,
+      });
+
+      const result = manager.checkCompliance('half', testDate);
+
+      expect(result.allowed).toBe(true);
+      expect(result.requiredPosition).toBe('half');
+    });
+
+    test('request conflicting with requirement is denied', () => {
+      const testDate = new Date('2024-06-01T12:00:00Z');
+
+      manager.addRule({
+        id: 'half-mast',
+        level: 'half_mast',
+        position: 'half',
+        action: 'required',
+        reason: 'National mourning',
+        startDate: new Date('2024-06-01T00:00:00Z'),
+        endDate: new Date('2024-06-01T23:59:59Z'),
+        active: true,
+      });
+
+      const result = manager.checkCompliance('full', testDate);
+
+      expect(result.allowed).toBe(false);
+      expect(result.requiredPosition).toBe('half');
+      expect(result.blockingRule).toBeDefined();
+    });
+
+    test('request with no active rules is allowed', () => {
+      const testDate = new Date('2024-06-01T12:00:00Z');
+
+      const result = manager.checkCompliance('full', testDate);
+
+      expect(result.allowed).toBe(true);
+      expect(result.requiredPosition).toBe(null);
+      expect(result.reason).toContain('No active compliance requirements');
+    });
+  });
+
+  describe('Enforced Position', () => {
+    test('returns highest priority required position', () => {
+      const testDate = new Date('2024-06-01T12:00:00Z');
+
+      manager.addRule({
+        id: 'local',
+        level: 'local',
+        position: 'down',
+        action: 'required',
+        reason: 'Local rule',
+        active: true,
+      });
+
+      manager.addRule({
+        id: 'half-mast',
+        level: 'half_mast',
+        position: 'half',
+        action: 'required',
+        reason: 'Half-mast directive',
+        active: true,
+      });
+
+      const enforced = manager.getEnforcedPosition(testDate);
+
+      expect(enforced).toBe('half');
+    });
+
+    test('returns null when no requirements active', () => {
+      const testDate = new Date('2024-06-01T12:00:00Z');
+
+      const enforced = manager.getEnforcedPosition(testDate);
+
+      expect(enforced).toBe(null);
+    });
+  });
+
+  describe('Rule Management', () => {
+    test('can add and retrieve rules', () => {
+      const rule: ComplianceRule = {
+        id: 'test-rule',
+        level: 'federal',
+        position: 'half',
+        action: 'required',
+        reason: 'Test rule',
+        active: true,
+      };
+
+      manager.addRule(rule);
+      const rules = manager.getAllRules();
+
+      expect(rules).toContainEqual(rule);
+    });
+
+    test('can remove rules', () => {
+      const rule: ComplianceRule = {
+        id: 'test-rule',
+        level: 'federal',
+        position: 'half',
+        action: 'required',
+        reason: 'Test rule',
+        active: true,
+      };
+
+      manager.addRule(rule);
+      manager.removeRule('test-rule');
+      const rules = manager.getAllRules();
+
+      expect(rules).not.toContainEqual(rule);
+    });
+
+    test('can update rules', () => {
+      const rule: ComplianceRule = {
+        id: 'test-rule',
+        level: 'federal',
+        position: 'half',
+        action: 'required',
+        reason: 'Test rule',
+        active: true,
+      };
+
+      manager.addRule(rule);
+      manager.updateRule('test-rule', { active: false });
+      const rules = manager.getAllRules();
+      const updated = rules.find(r => r.id === 'test-rule');
+
+      expect(updated?.active).toBe(false);
+    });
+  });
+});

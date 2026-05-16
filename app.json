@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "CapacityProject",
+    "slug": "capacity-project",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./public/icon.png",
+    "userInterfaceStyle": "automatic",
+    "entryPoint": "./index.js",
+    "main": "./index.js",
+    "splash": {
+      "image": "./public/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.capacity.project"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./public/icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.capacity.project"
+    },
+    "web": {
+      "favicon": "./public/favicon.ico"
+    }
+  }
+}
