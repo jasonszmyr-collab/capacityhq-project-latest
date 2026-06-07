@@ -4,23 +4,39 @@ import { useEffect, useState } from "react";
 import AppHeader from "./AppHeader";
 import BottomNav from "./BottomNav";
 
-const API = "http://192.168.0.169:3000";
+// 🔥 USE CLOUD (NOT LOCAL IP)
+const API = "https://capacityhq-project-latest.onrender.com";
 
 const HomePage = () => {
 
-  // ✅ STATE
   const [deviceStatus, setDeviceStatus] = useState<"online" | "offline">("offline");
   const [lastSeen, setLastSeen] = useState<string | null>(null);
   const [commandStatus, setCommandStatus] = useState<string | null>(null);
 
-  // 🔥 REAL DEVICE CHECK (NO SUPABASE)
   useEffect(() => {
 
     const checkDevice = async () => {
       try {
-        const res = await fetch(API + "/control");
 
-        if (res.ok) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 4000);
+
+        const res = await fetch(API + "/control", {
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (!res.ok) {
+          throw new Error("Bad response");
+        }
+
+        const data = await res.json();
+
+        console.log("Device response:", data);
+
+        // ✅ VALID RESPONSE CHECK
+        if (data && typeof data.motor !== "undefined") {
           setDeviceStatus("online");
           setLastSeen(new Date().toISOString());
           setCommandStatus("connected");
@@ -29,8 +45,9 @@ const HomePage = () => {
         }
 
       } catch (err) {
-        console.log("Device check failed");
+        console.log("Device check failed:", err);
         setDeviceStatus("offline");
+        setCommandStatus("error");
       }
     };
 
@@ -56,7 +73,6 @@ const HomePage = () => {
       {/* 🔥 OVERLAY */}
       <div className="absolute inset-0 bg-black/60" />
 
-      {/* CONTENT */}
       <div className="relative z-10">
 
         <AppHeader title="HonorPole" />
@@ -74,9 +90,8 @@ const HomePage = () => {
         <section className="flex items-center justify-center min-h-screen px-6 pt-24 pb-24">
           <div className="glass-panel flex flex-col items-center text-center animate-fade-in">
 
-            {/* TITLE */}
-            <h1 className="mb-4 text-5xl font-semibold text-white tracking-tight">
-              HonorPole
+            <h1 className="mb-4 text-5xl font-semibold text-red-500 tracking-tight">
+              TEST BUILD 123
             </h1>
 
             <p className="text-gray-300">
@@ -114,7 +129,7 @@ const HomePage = () => {
                 {commandStatus === "connected" && "🟢 Connected"}
                 {commandStatus === "sending" && "⏳ Sending..."}
                 {commandStatus === "sent" && "✅ Command Sent"}
-                {commandStatus === "error" && "❌ Error"}
+                {commandStatus === "error" && "❌ Connection Error"}
               </div>
             )}
 
@@ -125,8 +140,8 @@ const HomePage = () => {
                 ☁ <span>Cloud Control</span>
               </Link>
 
-              <Link to="/setup" className="btn flex items-center justify-center gap-2">
-                ⚙ <span>HonorPole Setup</span>
+              <Link to="/wifi" className="btn flex items-center justify-center gap-2">
+  ⚙            <span>HonorPole Setup</span>
               </Link>
 
               <Link to="/wifi" className="btn flex items-center justify-center gap-2">

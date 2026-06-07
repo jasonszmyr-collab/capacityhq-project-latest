@@ -71,8 +71,8 @@ function App() {
             <>
               {/* MAIN */}
               <Route path="/" element={<HomePage />} />
-              <Route path="/wifi" element={<WiFiSetup />} />
-              <Route path="/setup" element={<HonorPoleConfig />} />
+              <Route path="/wifi" element={<WifiScan />} />
+              <Route path="/setup" element={<WifiScan />} />
               <Route path="/cloud" element={<CloudControlPage />} />
               <Route path="/flag-test" element={<FlagControlTest />} />
 

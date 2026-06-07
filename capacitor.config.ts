@@ -4,6 +4,11 @@ const config: CapacitorConfig = {
   appId: 'com.capacity.app',
   appName: 'HonorPole',
   webDir: 'dist',
+
+  server: {
+    cleartext: true
+  },
+
   plugins: {
     Camera: {
       allowEditing: true,

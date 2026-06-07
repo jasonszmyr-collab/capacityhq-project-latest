@@ -96,65 +96,46 @@ class WiFiService {
 
   async discoverHonorPole(): Promise<HonorPoleDevice | null> {
 
-    /* 1️⃣ Try mDNS first */
+  console.log("Trying HonorPole discovery...");
 
-    try {
+  try {
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2000);
+    const res = await fetch(
+      "http://192.168.4.1/status"
+    );
 
-      const res = await fetch(this.HONORPOLE_LOCAL, {
-        method: "GET",
-        signal: controller.signal
-      });
+    console.log(
+      "Discovery status:",
+      res.status
+    );
 
-      clearTimeout(timeout);
+    const text =
+      await res.text();
 
-      if (res.ok) {
+    console.log(
+      "Discovery response:",
+      text
+    );
 
-        this.deviceUrl = this.HONORPOLE_LOCAL;
+    this.deviceUrl =
+      "http://192.168.4.1";
 
-        return {
-          ip: "honorpole.local",
-          hostname: "HonorPole",
-          reachable: true
-        };
+    return {
+      ip: "192.168.4.1",
+      hostname: "HonorPole",
+      reachable: true
+    };
 
-      }
+  } catch (err) {
 
-    } catch {}
-
-    /* 2️⃣ Try fallback IP */
-
-    try {
-
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2000);
-
-      const res = await fetch(this.HONORPOLE_FALLBACK, {
-        method: "GET",
-        signal: controller.signal
-      });
-
-      clearTimeout(timeout);
-
-      if (res.ok) {
-
-        this.deviceUrl = this.HONORPOLE_FALLBACK;
-
-        return {
-          ip: "192.168.4.1",
-          hostname: "HonorPole",
-          reachable: true
-        };
-
-      }
-
-    } catch {}
+    console.error(
+      "DISCOVERY FAILED:",
+      err
+    );
 
     return null;
-
   }
+}
 
   /* --------------------------------------------------
      CHECK IF CONNECTED TO HONORPOLE AP
@@ -233,7 +214,7 @@ class WiFiService {
 
       }
 
-      const res = await fetch(`${this.deviceUrl}/wifi`, {
+      const res = await fetch(`${this.deviceUrl}/save`, {
 
         method: "POST",
 
@@ -242,8 +223,8 @@ class WiFiService {
         },
 
         body: new URLSearchParams({
-          ssid: credentials.ssid,
-          password: credentials.password
+        ssid: credentials.ssid,
+        pass: credentials.password
         }).toString()
 
       });
@@ -304,15 +285,54 @@ class WiFiService {
 
   async scanNetworks(): Promise<WiFiNetwork[]> {
 
-    return [
+  try {
 
-      { ssid: "HonorPole-Setup", signal: 85, secure: false },
-      { ssid: "Home-Network", signal: 72, secure: true },
-      { ssid: "Office-WiFi", signal: 60, secure: true }
+    const device =
+      await this.discoverHonorPole();
 
-    ];
+    if (!device) {
+      return [];
+    }
 
+    const res = await fetch(
+      `${this.deviceUrl}/scan`
+    );
+
+    if (!res.ok) {
+      return [];
+    }
+
+    const data = await res.json();
+
+    return (
+      data.networks || []
+    ).map((n: any) => ({
+
+      ssid: n.ssid,
+
+      signal:
+        Math.max(
+          0,
+          Math.min(
+            100,
+            2 * (n.rssi + 100)
+          )
+        ),
+
+      secure: n.secure
+
+    }));
+
+  } catch (error) {
+
+    console.error(
+      "Scan failed:",
+      error
+    );
+
+    return [];
   }
+}
 
   /* --------------------------------------------------
      STORAGE

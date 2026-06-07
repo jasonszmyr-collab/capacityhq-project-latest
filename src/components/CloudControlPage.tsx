@@ -1,61 +1,76 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 export default function CloudControlPage() {
 
-  const API = "http://192.168.0.169:3000";
+  const API = "https://capacityhq-project-latest.onrender.com";
 
   const [loading, setLoading] = useState<string | null>(null);
   const [lastCommand, setLastCommand] = useState<string | null>(null);
-  const [status, setStatus] = useState<string>("Checking...");
-
-  // 🔥 REAL CONNECTION CHECK
-  useEffect(() => {
-    const checkConnection = async () => {
-      try {
-        const res = await fetch(API + "/control");
-        if (res.ok) {
-          setStatus("Device Online");
-        } else {
-          setStatus("Offline");
-        }
-      } catch {
-        setStatus("Offline");
-      }
-    };
-
-    checkConnection();
-    const interval = setInterval(checkConnection, 5000);
-
-    return () => clearInterval(interval);
-  }, []);
+  const [status, setStatus] = useState<string>("Connected");
 
   const sendCommand = async (command: string) => {
-    setLoading(command);
-    setStatus("Sending...");
 
-    try {
-      console.log("Sending:", command);
+  console.log("Sending:", command);
 
-      await fetch(API + "/control", {
+  setLoading(command);
+  setStatus("Sending...");
+
+  try {
+
+    const res = await fetch(
+      API + "/control",
+      {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          motor: command,
-        }),
-      });
+          motor: command
+        })
+      }
+    );
 
-      setLastCommand(command);
-      setStatus("Command Sent");
+    console.log(
+      "HTTP Status:",
+      res.status
+    );
 
-    } catch (err) {
-      console.error("ERROR:", err);
-      setStatus("Error");
+    const text =
+      await res.text();
+
+    console.log(
+      "Response:",
+      text
+    );
+
+    if (!res.ok) {
+
+      setStatus(
+        "HTTP " + res.status
+      );
+
+      return;
     }
 
-    setLoading(null);
-  };
+    setLastCommand(command);
+    setStatus("Sent");
+
+  } catch (err: any) {
+
+  console.error("POST FAILED", err);
+
+  alert(
+    "POST FAILED:\n" +
+    String(err) +
+    "\n\n" +
+    JSON.stringify(err, null, 2)
+  );
+
+  setStatus("Error");
+}
+
+  setLoading(null);
+};
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center text-white px-6 space-y-6">
