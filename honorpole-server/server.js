@@ -2,7 +2,12 @@ const express = require("express");
 const cors = require("cors");
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"]
+}));
+
 app.use(express.json());
 
 // In-memory state (simple for now)
@@ -39,11 +44,18 @@ app.post("/control", (req, res) => {
   res.sendStatus(200);
 });
 
+app.get("/test", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.send("HELLO");
+});
+
 // 📱 App fetches status
 app.get("/status", (req, res) => {
   res.json(deviceState);
 });
 
-app.listen(3000, () => {
-  console.log("Server running on port 3000");
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });

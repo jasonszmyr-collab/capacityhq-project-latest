@@ -57,13 +57,21 @@ export default function CloudControlPage() {
 
   } catch (err: any) {
 
-  console.error("POST FAILED", err);
+  console.error(
+    "POST FAILED:",
+    err
+  );
 
   alert(
-    "POST FAILED:\n" +
-    String(err) +
-    "\n\n" +
-    JSON.stringify(err, null, 2)
+    JSON.stringify(
+      {
+        name: err?.name,
+        message: err?.message,
+        stack: err?.stack
+      },
+      null,
+      2
+    )
   );
 
   setStatus("Error");
@@ -71,6 +79,16 @@ export default function CloudControlPage() {
 
   setLoading(null);
 };
+
+  console.log(
+  "URL:",
+  window.location.href
+);
+
+console.log(
+  "ORIGIN:",
+  window.location.origin
+);
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center text-white px-6 space-y-6">
@@ -83,6 +101,14 @@ export default function CloudControlPage() {
       <div className="text-center">
         <p className="text-lg">Status:</p>
         <p className="text-xl font-bold">{status}</p>
+
+        <div className="text-xs break-all">
+          URL: {window.location.href}
+        </div>
+
+        <div className="text-xs break-all">
+          Origin: {window.location.origin}
+        </div>
 
         {lastCommand && (
           <p className="text-sm mt-2">
@@ -111,21 +137,89 @@ export default function CloudControlPage() {
         </button>
 
         <button
-          onClick={() => sendCommand("DOWN")}
-          disabled={loading !== null}
-          className="w-full p-4 rounded-lg bg-green-600"
-        >
-          {loading === "DOWN" ? "Sending..." : "Lower Flag (DOWN)"}
-        </button>
+  onClick={() => sendCommand("DOWN")}
+  disabled={loading !== null}
+  className="w-full p-4 rounded-lg bg-green-600"
+>
+  {loading === "DOWN" ? "Sending..." : "Lower Flag (DOWN)"}
+</button>
 
-        <button
-          onClick={() => sendCommand("STOP")}
-          disabled={loading !== null}
-          className="w-full p-4 rounded-lg bg-red-600"
-        >
-          {loading === "STOP" ? "Sending..." : "Stop"}
-        </button>
+<button
+  onClick={() => sendCommand("STOP")}
+  disabled={loading !== null}
+  className="w-full p-4 rounded-lg bg-red-600"
+>
+  {loading === "STOP" ? "Sending..." : "Stop"}
+</button>
 
+<button
+  onClick={() => {
+    alert(
+      "ONLINE: " + navigator.onLine
+    );
+  }}
+  className="w-full p-4 rounded-lg bg-gray-600"
+>
+  Test Online
+</button>
+
+<button
+  onClick={() => {
+    window.open(
+      "https://capacityhq-project-latest.onrender.com/control",
+      "_blank"
+    );
+  }}
+  className="w-full p-4 rounded-lg bg-indigo-600"
+>
+  Open Render
+</button>
+
+<button
+  onClick={async () => {
+
+    try {
+
+      const r = await fetch(
+        "https://capacityhq-project-latest.onrender.com/test"
+      );
+
+      alert(
+        JSON.stringify(
+          {
+            ok: r.ok,
+            status: r.status,
+            type: r.type,
+            redirected: r.redirected,
+            url: r.url
+          },
+          null,
+          2
+        )
+      );
+
+    } catch (e: any) {
+
+  console.error("FAILED", e);
+
+  alert(
+    JSON.stringify(
+      {
+        name: e?.name,
+        message: e?.message
+      },
+      null,
+      2
+    )
+  );
+
+}
+
+  }}
+  className="w-full p-4 rounded-lg bg-purple-600"
+>
+  Test GET
+</button>
       </div>
     </div>
   );

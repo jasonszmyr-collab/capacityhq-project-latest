@@ -87,7 +87,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "@capacitor/android": "^8",
+    "@capacitor/android": "^8.3.1",
     "@capacitor/cli": "^8.0.0",
     "@eslint/js": "^9.25.0",
     "@types/node": "^24.7.0",
