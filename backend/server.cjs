@@ -209,6 +209,12 @@ app.get("/control", (req, res) => {
   // reset after read (important)
   currentCommand = "STOP";
 });
+app.get("/test", (req, res) => {
+  res.json({
+    success: true,
+    message: "HELLO FROM RENDER"
+  });
+});
 // --------------------
 // Start
 // --------------------
