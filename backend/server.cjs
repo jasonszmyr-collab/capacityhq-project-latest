@@ -5,19 +5,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Allow your Vite dev server
-app.use(
-  cors({
-    origin: [
-      "http://localhost:5173",
-      "http://192.168.0.169:3000",
-      "capacitor://localhost",
-      "http://localhost",
-      "*"
-    ],
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+app.use(cors());
+
+app.options("*", cors());
 
 app.use(express.json());
 
