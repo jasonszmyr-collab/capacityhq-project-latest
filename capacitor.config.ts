@@ -6,6 +6,7 @@ const config: CapacitorConfig = {
   webDir: 'dist',
 
   server: {
+    androidScheme: 'https',
     cleartext: true
   },
 
@@ -16,14 +17,10 @@ const config: CapacitorConfig = {
     },
     Geolocation: {
       enableHighAccuracy: true
-    },
-    PushNotifications: {
-      presentationOptions: ['badge', 'sound', 'alert']
     }
   }
 };
 
 export default config;
-
 
 

@@ -173,11 +173,17 @@ app.get("/devices/:deviceId/commands", requireAuth, (req, res) => {
   const list = commandsByDevice.get(deviceId) || [];
   res.json(list.slice(0, limit));
 });
+
 // =======================
-// SIMPLE CONTROL (ESP32 COMPAT)
+// ESP32 + APP REAL-TIME CONTROL (FINAL)
 // =======================
 
-let currentCommand = "STOP";
+let deviceState = {
+  motor: "STOP",
+  status: "idle",
+  lastSeen: Date.now(),
+  commandPending: false
+};
 
 // 📥 APP sends command
 app.post("/control", (req, res) => {
@@ -186,7 +192,9 @@ app.post("/control", (req, res) => {
   console.log("Command received:", motor);
 
   if (motor) {
-    currentCommand = motor;
+    deviceState.motor = motor;
+    deviceState.status = "command_sent";
+    deviceState.commandPending = true;
   }
 
   res.json({ success: true });
@@ -194,20 +202,46 @@ app.post("/control", (req, res) => {
 
 // 📤 ESP32 reads command
 app.get("/control", (req, res) => {
-  res.json({ motor: currentCommand });
 
-  // reset after read (important)
-  currentCommand = "STOP";
+  res.json({
+    motor: deviceState.commandPending ? deviceState.motor : "STOP",
+    status: deviceState.status,
+    lastSeen: deviceState.lastSeen
+  });
+
 });
+
+// 📡 ESP32 sends heartbeat/status
+app.post("/status", (req, res) => {
+
+  const { motor, status } = req.body;
+
+  if (motor) deviceState.motor = motor;
+  if (status) deviceState.status = status;
+
+  deviceState.lastSeen = Date.now();
+
+  // 🔥 IMPORTANT: mark command completed
+  if (status === "done") {
+    deviceState.commandPending = false;
+  }
+
+  console.log("DEVICE UPDATE:", deviceState);
+
+  res.json({ ok: true });
+});
+
+// 🧪 TEST ROUTE
 app.get("/test", (req, res) => {
   res.json({
     success: true,
     message: "HELLO FROM RENDER"
   });
 });
+
 // --------------------
 // Start
 // --------------------
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`✅ Local Cloud API running on all interfaces: http://0.0.0.0:${PORT}`);
+  console.log(`✅ Cloud API running: ${PORT}`);
 });

@@ -174,31 +174,46 @@ console.log(
 >
   Open Render
 </button>
+<button
+  onClick={() => {
+    window.location.href =
+      "https://capacityhq-project-latest.onrender.com/test";
+  }}
+  className="w-full p-4 rounded-lg bg-pink-600"
+>
+  Navigate To Test
+</button>
 
 <button
   onClick={async () => {
 
     try {
 
-      const r = await fetch(
-        "https://capacityhq-project-latest.onrender.com/test"
-      );
+  const r = await fetch(
+    "https://capacityhq-project-latest.onrender.com/test",
+    {
+      method: "GET",
+      headers: {
+        Accept: "application/json"
+      }
+    }
+  );
 
-      alert(
-        JSON.stringify(
-          {
-            ok: r.ok,
-            status: r.status,
-            type: r.type,
-            redirected: r.redirected,
-            url: r.url
-          },
-          null,
-          2
-        )
-      );
+  const text = await r.text();
 
-    } catch (e: any) {
+  alert(
+    JSON.stringify(
+      {
+        ok: r.ok,
+        status: r.status,
+        body: text
+      },
+      null,
+      2
+    )
+  );
+
+} catch (e: any) {
 
   console.error("FAILED", e);
 
@@ -206,7 +221,10 @@ console.log(
     JSON.stringify(
       {
         name: e?.name,
-        message: e?.message
+        message: e?.message,
+        stack: e?.stack,
+        toString: String(e),
+        keys: Object.keys(e || {})
       },
       null,
       2
@@ -220,6 +238,7 @@ console.log(
 >
   Test GET
 </button>
+
       </div>
     </div>
   );
