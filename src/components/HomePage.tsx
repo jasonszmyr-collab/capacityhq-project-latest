@@ -4,60 +4,58 @@ import { useEffect, useState } from "react";
 import AppHeader from "./AppHeader";
 import BottomNav from "./BottomNav";
 
-// 🔥 USE CLOUD (NOT LOCAL IP)
-const API = "https://capacityhq-project-latest.onrender.com";
-
 const HomePage = () => {
 
   const [deviceStatus, setDeviceStatus] = useState<"online" | "offline">("offline");
   const [lastSeen, setLastSeen] = useState<string | null>(null);
   const [commandStatus, setCommandStatus] = useState<string | null>(null);
 
+  // =========================
+  // 🔥 WEBSOCKET (REAL-TIME)
+  // =========================
   useEffect(() => {
 
-    const checkDevice = async () => {
-      try {
+    const ws = new WebSocket("wss://capacityhq-project-latest.onrender.com");
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 4000);
+    ws.onopen = () => {
+      console.log("✅ WebSocket connected");
+    };
 
-        const res = await fetch(API + "/control", {
-          signal: controller.signal,
-        });
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
 
-        clearTimeout(timeout);
+      console.log("📡 LIVE:", data);
 
-        if (!res.ok) {
-          throw new Error("Bad response");
-        }
+      const now = Date.now();
 
-        const data = await res.json();
-
-        console.log("Device response:", data);
-
-        // ✅ VALID RESPONSE CHECK
-        if (data && typeof data.motor !== "undefined") {
-          setDeviceStatus("online");
-          setLastSeen(new Date().toISOString());
-          setCommandStatus("connected");
-        } else {
-          setDeviceStatus("offline");
-        }
-
-      } catch (err) {
-        console.log("Device check failed:", err);
+      // ✅ ONLINE CHECK
+      if (data.lastSeen && (now - data.lastSeen < 10000)) {
+        setDeviceStatus("online");
+      } else {
         setDeviceStatus("offline");
-        setCommandStatus("error");
+      }
+
+      // ✅ STATUS FROM SERVER
+      setCommandStatus(data.status || "idle");
+
+      if (data.lastSeen) {
+        setLastSeen(new Date(data.lastSeen).toISOString());
       }
     };
 
-    // initial check
-    checkDevice();
+    ws.onerror = (err) => {
+      console.log("❌ WebSocket error", err);
+      setDeviceStatus("offline");
+    };
 
-    // repeat every 5 seconds
-    const interval = setInterval(checkDevice, 5000);
+    ws.onclose = () => {
+      console.log("🔌 WebSocket disconnected");
+      setDeviceStatus("offline");
+    };
 
-    return () => clearInterval(interval);
+    return () => {
+      ws.close();
+    };
 
   }, []);
 
@@ -90,8 +88,9 @@ const HomePage = () => {
         <section className="flex items-center justify-center min-h-screen px-6 pt-24 pb-24">
           <div className="glass-panel flex flex-col items-center text-center animate-fade-in">
 
-            <h1 className="mb-4 text-5xl font-semibold text-red-500 tracking-tight">
-              TEST BUILD 123
+            {/* TITLE */}
+            <h1 className="mb-4 text-5xl font-semibold text-white tracking-tight">
+              HonorPole
             </h1>
 
             <p className="text-gray-300">
@@ -126,10 +125,11 @@ const HomePage = () => {
             {/* 🔥 COMMAND STATUS */}
             {commandStatus && (
               <div className="mt-3 px-4 py-2 rounded-lg bg-white/10 backdrop-blur text-sm text-gray-200">
-                {commandStatus === "connected" && "🟢 Connected"}
-                {commandStatus === "sending" && "⏳ Sending..."}
-                {commandStatus === "sent" && "✅ Command Sent"}
-                {commandStatus === "error" && "❌ Connection Error"}
+                {commandStatus === "idle" && "🟢 Idle"}
+                {commandStatus === "command_sent" && "⏳ Command Sent"}
+                {commandStatus === "moving" && "⚙ Moving"}
+                {commandStatus === "done" && "✅ Complete"}
+                {commandStatus === "error" && "❌ Error"}
               </div>
             )}
 
@@ -140,8 +140,8 @@ const HomePage = () => {
                 ☁ <span>Cloud Control</span>
               </Link>
 
-              <Link to="/wifi" className="btn flex items-center justify-center gap-2">
-  ⚙            <span>HonorPole Setup</span>
+              <Link to="/setup" className="btn flex items-center justify-center gap-2">
+                ⚙ <span>HonorPole Setup</span>
               </Link>
 
               <Link to="/wifi" className="btn flex items-center justify-center gap-2">
