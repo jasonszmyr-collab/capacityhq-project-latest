@@ -3,11 +3,20 @@ const cors = require("cors");
 const http = require("http");
 const WebSocket = require("ws");
 
+console.log("====================================");
+console.log("RUNNING SERVER:", __filename);
+console.log("====================================");
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+
+// --------------------
+// OTA FILE HOSTING
+// --------------------
+app.use(express.static("public"));
 
 // --------------------
 // In-memory "database"
@@ -88,10 +97,31 @@ app.post("/auth/login", (req, res) => {
 // DEVICE STATE (REAL-TIME)
 // --------------------
 let deviceState = {
-  motor: "STOP",
-  status: "idle",
-  lastSeen: Date.now(),
-  commandPending: false
+
+    // Device Connection
+    online: false,
+    lastSeen: Date.now(),
+
+    // Motion
+    motor: "STOP",
+    state: "IDLE",
+    status: "idle",
+
+    // Position
+    position: 0,
+    target: 0,
+    full: 8000,
+    half: 4000,
+    percent: 0,
+
+    // Network
+    firmware: "4.0.0",
+    wifi: false,
+    ip: "",
+    rssi: 0,
+
+    // Commands
+    commandPending: false
 };
 
 // --------------------
@@ -153,7 +183,11 @@ function broadcastState() {
 
 // 📥 APP sends command
 app.post("/control", (req, res) => {
-  const { motor } = req.body;
+  console.log("BODY:", req.body);
+
+const motor = req.body.motor || req.body.command;
+
+console.log("Command received:", motor);
 
   console.log("Command received:", motor);
 
@@ -168,7 +202,96 @@ app.post("/control", (req, res) => {
   res.json({ success: true });
 });
 
-// 📤 ESP32 reads command
+// 📡 ESP32 Status Update
+app.post("/status", (req, res) => {
+
+  console.log("POST /status HIT");
+
+  const data = req.body;
+
+  deviceState.online = true;
+  deviceState.lastSeen = Date.now();
+
+  if (
+    data.motor !== undefined &&
+    !deviceState.commandPending
+) {
+    deviceState.motor = data.motor;
+}
+
+  if (data.status !== undefined)
+    deviceState.status = data.status;
+
+  if (data.state !== undefined)
+    deviceState.state = data.state;
+
+  if (data.position !== undefined)
+    deviceState.position = data.position;
+
+  if (data.state !== undefined)
+    deviceState.state = data.state;
+
+  if (data.target !== undefined)
+    deviceState.target = data.target;
+
+  if (data.full !== undefined)
+    deviceState.full = data.full;
+
+  if (data.half !== undefined)
+    deviceState.half = data.half;
+
+  if (data.percent !== undefined)
+    deviceState.percent = data.percent;
+
+  if (data.firmware !== undefined)
+    deviceState.firmware = data.firmware;
+
+  if (data.wifi !== undefined)
+    deviceState.wifi = data.wifi;
+
+  if (data.ip !== undefined)
+    deviceState.ip = data.ip;
+
+  if (data.rssi !== undefined)
+    deviceState.rssi = data.rssi;
+
+  console.table(deviceState);
+
+  broadcastState();
+
+  res.json({
+    success: true
+  });
+
+});
+
+// ---------------------------------------------------------
+// Dashboard status endpoint
+// ---------------------------------------------------------
+
+app.get("/status", (req, res) => {
+
+  res.json({
+    online: deviceState.online,
+    status: deviceState.status,
+    motor: deviceState.motor,
+
+    position: deviceState.position,
+    target: deviceState.target,
+    full: deviceState.full,
+    half: deviceState.half,
+    percent: deviceState.percent,
+
+    firmware: deviceState.firmware,
+    wifi: deviceState.wifi,
+    ip: deviceState.ip,
+
+    lastSeen: deviceState.lastSeen
+  });
+
+});
+
+// 📤 ESP32 polls for commands
 app.get("/control", (req, res) => {
 
   const response = {
@@ -177,38 +300,25 @@ app.get("/control", (req, res) => {
     lastSeen: deviceState.lastSeen
   };
 
+  console.log("GET /control ->", response.motor);
+
   res.json(response);
 
-  // 🔥 only clear if command was actually sent
   if (deviceState.commandPending) {
+
+    console.log("Command delivered:", deviceState.motor);
+
     deviceState.commandPending = false;
     deviceState.status = "delivered";
-  }
-});
 
-// 📡 ESP32 heartbeat
-app.post("/status", (req, res) => {
-  const { motor, status } = req.body;
+    // DO NOT reset motor here.
+    // The ESP32 status update will tell us when
+    // the command has actually completed.
 
-  if (motor) deviceState.motor = motor;
-  if (status) deviceState.status = status;
-
-  deviceState.lastSeen = Date.now();
-
-  // 🔥 mark device as actively alive
-  deviceState.online = true;
-
-  if (status === "done") {
-    deviceState.commandPending = false;
+    broadcastState();
   }
 
-  console.log("DEVICE UPDATE:", deviceState);
-
-  broadcastState();
-
-  res.json({ ok: true });
 });
-
 // --------------------
 // TEST
 // --------------------
