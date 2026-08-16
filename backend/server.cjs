@@ -291,6 +291,99 @@ app.get("/status", (req, res) => {
 
 });
 
+// ---------------------------------------------------------
+// Frontend device discovery compatibility endpoint
+// ---------------------------------------------------------
+
+app.get("/api/devices", (req, res) => {
+
+  res.json([
+    {
+      deviceId: "HP-001",
+      deviceName: "HonorPole",
+      firmware: deviceState.firmware || "--",
+      serialNumber: "HP-001",
+      ipAddress: deviceState.ip || "",
+      online: deviceState.online === true,
+      lastSeen: String(deviceState.lastSeen || ""),
+      signalStrength: 0
+    }
+  ]);
+
+});
+
+// ---------------------------------------------------------
+// Frontend device telemetry compatibility endpoint
+// ---------------------------------------------------------
+
+app.get("/api/device/:deviceId/status", (req, res) => {
+
+  if (req.params.deviceId !== "HP-001") {
+    return res.status(404).json({
+      error: "Device not found"
+    });
+  }
+
+  let movement = "STOPPED";
+
+  if (deviceState.status === "moving") {
+    movement =
+      deviceState.motor === "UP"
+        ? "RAISING"
+        : deviceState.motor === "DOWN"
+          ? "LOWERING"
+          : "STOPPED";
+  }
+
+  res.json({
+    online: deviceState.online === true,
+
+    firmware: deviceState.firmware || "--",
+    hardware: "ESP32-S3",
+    serialNumber: "HP-001",
+    deviceName: "HonorPole",
+
+    currentPosition: deviceState.position || 0,
+    targetPosition: deviceState.target || 0,
+    learnedTopPosition: deviceState.full || 0,
+
+    movement: movement,
+    moving: deviceState.status === "moving",
+    automaticMode: true,
+    calibrated: (deviceState.full || 0) > 0,
+
+    commandStatus: deviceState.status || "idle",
+
+    network: {
+      wifiConnected: deviceState.wifi === true,
+      cloudConnected: deviceState.online === true,
+      websocketConnected: false,
+      ssid: "",
+      ipAddress: deviceState.ip || "",
+      signalStrength: 0
+    },
+
+    health: {
+      batteryVoltage: 0,
+      motorCurrent: 0,
+      cpuTemperature: 0,
+      freeMemory: 0,
+      uptime: 0,
+      lastHeartbeat: String(deviceState.lastSeen || "")
+    },
+
+    directives: {
+      federal: "",
+      state: "",
+      source: "",
+      updated: ""
+    },
+
+    events: []
+  });
+
+});
+
 // 📤 ESP32 polls for commands
 app.get("/control", (req, res) => {
 
