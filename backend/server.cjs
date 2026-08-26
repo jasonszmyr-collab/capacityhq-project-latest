@@ -666,8 +666,26 @@ if (data.half !== undefined) {
   deviceState.half = data.half;
 }
 
+// Calculate physical travel percentage from authoritative
+// position/full telemetry when the ESP32 does not send percent.
 if (data.percent !== undefined) {
   deviceState.percent = data.percent;
+} else if (
+  Number.isFinite(Number(deviceState.position)) &&
+  Number.isFinite(Number(deviceState.full)) &&
+  Number(deviceState.full) > 0
+) {
+  deviceState.percent = Math.max(
+    0,
+    Math.min(
+      100,
+      Math.round(
+        (Number(deviceState.position) /
+          Number(deviceState.full)) *
+          100
+      )
+    )
+  );
 }
 
 if (typeof data.calibrated === "boolean") {
