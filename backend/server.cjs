@@ -24,8 +24,6 @@ app.use(express.static("public"));
 // IN-MEMORY DATABASE
 // =========================================================
 
-const users = new Map();
-const devicesByUser = new Map();
 const deviceStatus = new Map();
 const commandsByDevice = new Map();
 
@@ -36,34 +34,78 @@ function makeId(prefix = "id") {
 }
 
 // =========================================================
-// AUTHENTICATION
+// SUPABASE USER AUTHENTICATION
+// Validates mobile/dashboard Bearer tokens before allowing
+// protected cloud API operations.
 // =========================================================
 
-function requireAuth(req, res, next) {
-  const auth = req.headers.authorization || "";
+const SUPABASE_URL =
+  process.env.SUPABASE_URL ||
+  "https://xkgiovddglqxcruwabtm.supabase.co";
 
-  if (!auth.startsWith("Bearer ")) {
+async function requireSupabaseAuth(req, res, next) {
+  const authorization =
+    typeof req.headers.authorization === "string"
+      ? req.headers.authorization.trim()
+      : "";
+
+  if (!authorization.startsWith("Bearer ")) {
     return res.status(401).json({
-      error: "Missing Authorization Bearer token"
+      success: false,
+      error: "Authentication required"
     });
   }
 
-  const token = auth.replace("Bearer ", "").trim();
+  const token = authorization.slice(7).trim();
 
-  for (const [email, user] of users.entries()) {
-    if (user.token === token) {
-      req.user = {
-        ...user,
-        email
-      };
-
-      return next();
-    }
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      error: "Authentication required"
+    });
   }
 
-  return res.status(401).json({
-    error: "Invalid token"
-  });
+  try {
+    const response = await fetch(
+      `${SUPABASE_URL}/auth/v1/user`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      }
+    );
+
+    if (!response.ok) {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid or expired authentication"
+      });
+    }
+
+    const user = await response.json();
+
+    if (!user?.id) {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid authentication"
+      });
+    }
+
+    req.user = user;
+      req.accessToken = token;
+      next();
+  } catch (error) {
+    console.error(
+      "Supabase authentication verification failed:",
+      error instanceof Error ? error.message : "Unknown error"
+    );
+
+    return res.status(503).json({
+      success: false,
+      error: "Authentication service unavailable"
+    });
+  }
 }
 
 // =========================================================
@@ -80,59 +122,82 @@ app.get("/health", (req, res) => {
 });
 
 // =========================================================
-// AUTH
+// DEVICE AUTHORIZATION
+// Confirms that the authenticated Supabase user has a
+// device_users membership for the requested HonorPole.
+// Supabase RLS limits the query to the caller's own rows.
 // =========================================================
 
-app.post("/auth/register", (req, res) => {
-  const { email, password } = req.body || {};
+async function requireDeviceAccess(req, res, next) {
+  const deviceId =
+    typeof req.params.deviceId === "string"
+      ? req.params.deviceId.trim()
+      : DEVICE_ID;
 
-  if (!email || !password) {
-    return res.status(400).json({
-      error: "email and password required"
+  if (!deviceId || deviceId !== DEVICE_ID) {
+    return res.status(404).json({
+      success: false,
+      error: "Device not found"
     });
   }
 
-  if (users.has(email)) {
-    return res.status(409).json({
-      error: "User exists"
-    });
-  }
-
-  const userId = makeId("user");
-  const token = makeId("token");
-
-  users.set(email, {
-    userId,
-    password,
-    token
-  });
-
-  devicesByUser.set(userId, []);
-
-  res.json({
-    userId,
-    token
-  });
-});
-
-app.post("/auth/login", (req, res) => {
-  const { email, password } = req.body || {};
-
-  const user = users.get(email);
-
-  if (!user || user.password !== password) {
+  if (!req.accessToken || !req.user?.id) {
     return res.status(401).json({
-      error: "Invalid login"
+      success: false,
+      error: "Authentication required"
     });
   }
 
-  user.token = makeId("token");
+  try {
+    const url =
+      `${SUPABASE_URL}/rest/v1/device_users` +
+      `?device_id=eq.${encodeURIComponent(deviceId)}` +
+      `&user_id=eq.${encodeURIComponent(req.user.id)}` +
+      `&select=device_id,user_id,role`;
 
-  res.json({
-    userId: user.userId,
-    token: user.token
-  });
-});
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${req.accessToken}`,
+        apikey: process.env.SUPABASE_ANON_KEY || ""
+      }
+    });
+
+    if (!response.ok) {
+      console.error(
+        "Device authorization lookup failed:",
+        response.status
+      );
+
+      return res.status(503).json({
+        success: false,
+        error: "Authorization service unavailable"
+      });
+    }
+
+    const memberships = await response.json();
+
+    if (!Array.isArray(memberships) || memberships.length === 0) {
+      return res.status(403).json({
+        success: false,
+        error: "Not authorized for this device"
+      });
+    }
+
+    req.deviceMembership = memberships[0];
+    next();
+  } catch (error) {
+    console.error(
+      "Device authorization verification failed:",
+      error instanceof Error ? error.message : "Unknown error"
+    );
+
+    return res.status(503).json({
+      success: false,
+      error: "Authorization service unavailable"
+    });
+  }
+}
 
 // =========================================================
 // DEVICE STATE
@@ -343,7 +408,7 @@ function queueCommand(command, source = "MANUAL") {
 // APP / AUTO / TEST SEND COMMAND
 // =========================================================
 
-app.post("/control", (req, res) => {
+app.post("/control", requireSupabaseAuth, requireDeviceAccess, (req, res) => {
   const body = req.body || {};
 
   const requestedCommand =
@@ -391,6 +456,8 @@ app.post("/control", (req, res) => {
 
 app.post(
   "/api/device/:deviceId/command",
+  requireSupabaseAuth,
+  requireDeviceAccess,
   (req, res) => {
     if (
       req.params.deviceId !== DEVICE_ID
@@ -589,24 +656,24 @@ app.post("/status", (req, res) => {
 
   if (!deviceState.commandPending) {
   const espMode =
-  data.mode !== undefined
-    ? String(data.mode).trim().toUpperCase()
-    : data.state !== undefined
-      ? String(data.state).trim().toUpperCase()
-      : "";
+    data.mode !== undefined
+      ? String(data.mode).trim().toUpperCase()
+      : data.state !== undefined
+        ? String(data.state).trim().toUpperCase()
+        : "";
 
   const hasMovingTelemetry =
     typeof data.moving === "boolean";
 
   const espMoving =
-    data.moving === true;
+    hasMovingTelemetry && data.moving === true;
 
   // Preserve the firmware mode separately for diagnostics.
   if (data.mode !== undefined) {
-  deviceState.state = data.mode;
-} else if (data.state !== undefined) {
-  deviceState.state = data.state;
-}
+    deviceState.state = data.mode;
+  } else if (data.state !== undefined) {
+    deviceState.state = data.state;
+  }
 
   // Explicit firmware error states take priority.
   if (espMode === "ERROR") {
@@ -623,22 +690,27 @@ app.post("/status", (req, res) => {
     deviceState.status = "calibrating";
   }
 
-  // The ESP32's moving=true is authoritative proof that
-  // physical motion is currently in progress.
-  else if (espMoving || espMode === "MOVING") {
+  // Explicit moving=true is authoritative proof of motion.
+  else if (espMoving) {
     deviceState.status = "moving";
-
-    // Keep deviceState.motor as FULL/HALF/BOTTOM so we retain
-    // the commanded destination while movement is occurring.
   }
 
-  // Once the ESP32 explicitly reports moving=false, the
-  // physical move has ended. Clear Render's delivered command
-  // state even if mode has not yet changed back to IDLE.
+  // Explicit moving=false is authoritative proof that
+  // physical motion has ended, even if mode is stale.
   else if (
-    (hasMovingTelemetry && data.moving === false) ||
-    espMode === "IDLE"
+    hasMovingTelemetry &&
+    data.moving === false
   ) {
+    deviceState.motor = "STOP";
+    deviceState.status = "idle";
+  }
+
+  // If moving telemetry is absent, use the firmware mode.
+  else if (espMode === "MOVING") {
+    deviceState.status = "moving";
+  }
+
+  else if (espMode === "IDLE") {
     deviceState.motor = "STOP";
     deviceState.status = "idle";
   }
@@ -774,7 +846,7 @@ app.get("/status", (req, res) => {
 // DEVICE DISCOVERY COMPATIBILITY ENDPOINT
 // =========================================================
 
-app.get("/api/devices", (req, res) => {
+app.get("/api/devices", requireSupabaseAuth, requireDeviceAccess, (req, res) => {
   res.json([
     {
       deviceId: DEVICE_ID,
@@ -800,6 +872,8 @@ app.get("/api/devices", (req, res) => {
 
 app.get(
   "/api/device/:deviceId/status",
+  requireSupabaseAuth,
+  requireDeviceAccess,
   (req, res) => {
     if (
       req.params.deviceId !== DEVICE_ID
@@ -935,44 +1009,6 @@ app.get(
 );
 
 // =========================================================
-// COMMAND DEBUG ENDPOINT
-// =========================================================
-
-app.get("/api/command/status", (req, res) => {
-  const command =
-    commandsByDevice.get(DEVICE_ID) ||
-    null;
-
-  res.json({
-    deviceId: DEVICE_ID,
-
-    pending:
-      deviceState.commandPending,
-
-    currentMotor:
-      deviceState.motor,
-
-    status:
-      deviceState.status,
-
-    command
-  });
-});
-
-// =========================================================
-// TEST
-// =========================================================
-
-app.get("/test", (req, res) => {
-  res.json({
-    success: true,
-    message: "HELLO FROM RENDER",
-    deviceId: DEVICE_ID,
-    serverTime: Date.now()
-  });
-});
-
-// =========================================================
 // START SERVER
 // =========================================================
 
@@ -989,3 +1025,5 @@ server.listen(
     );
   }
 );
+
+
