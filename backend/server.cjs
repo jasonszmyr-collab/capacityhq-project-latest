@@ -70,8 +70,9 @@ async function requireSupabaseAuth(req, res, next) {
       `${SUPABASE_URL}/auth/v1/user`,
       {
         method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`
+                headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: process.env.SUPABASE_ANON_KEY || ""
         }
       }
     );
