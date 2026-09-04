@@ -178,6 +178,16 @@ async function requireDeviceAccess(req, res, next) {
 
     const memberships = await response.json();
 
+    console.log(
+      "Device authorization diagnostic:",
+      {
+        userId: req.user.id,
+        deviceId,
+        membershipCount: Array.isArray(memberships)
+          ? memberships.length
+         : "not-array"
+      }
+    );
     if (!Array.isArray(memberships) || memberships.length === 0) {
       return res.status(403).json({
         success: false,
