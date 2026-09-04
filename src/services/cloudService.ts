@@ -1658,8 +1658,7 @@ console.log(
                 `${WS_ENDPOINT}?token=${encodeURIComponent(this.authToken)}`;
 
             console.log(
-                "[Cloud] Opening WebSocket:",
-                url
+                "[Cloud] Opening authenticated WebSocket"
             );
 
             this.socket = new WebSocket(url);
