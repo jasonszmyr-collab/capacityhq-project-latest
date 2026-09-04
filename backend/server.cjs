@@ -77,7 +77,17 @@ async function requireSupabaseAuth(req, res, next) {
       }
     );
 
-    if (!response.ok) {
+        if (!response.ok) {
+      const authErrorText = await response.text().catch(() => "");
+
+      console.error(
+        "Supabase auth rejected request:",
+        "status=",
+        response.status,
+        "body=",
+        authErrorText
+      );
+
       return res.status(401).json({
         success: false,
         error: "Invalid or expired authentication"
