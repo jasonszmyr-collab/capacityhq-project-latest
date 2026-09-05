@@ -5,48 +5,87 @@ export default function BottomNav() {
   const location = useLocation();
 
   const navItems = [
-    { label: "Home", path: "/" },
-    { label: "Cloud", path: "/cloud" },
-    { label: "Setup", path: "/setup" },
-    { label: "WiFi", path: "/wifi" },
+    {
+      label: "🏠",
+      title: "Home",
+      path: "/",
+    },
+    {
+      label: "🎛",
+      title: "Control",
+      path: "/cloud",
+    },
+    {
+      label: "⚙",
+      title: "Setup",
+      path: "/setup",
+    },
+    {
+      label: "👤",
+      title: "Settings",
+      path: "/settings",
+    },
   ];
 
   return (
-    <div
+    <nav
       style={{
         position: "fixed",
         bottom: 0,
         left: 0,
         width: "100%",
-        height: "60px",
+        height: "72px",
         display: "flex",
-        justifyContent: "space-around",
+        justifyContent: "space-evenly",
         alignItems: "center",
-        background: "rgba(0,0,0,0.7)",
-        backdropFilter: "blur(10px)",
+        background: "rgba(10,10,10,0.90)",
+        backdropFilter: "blur(18px)",
+        borderTop: "1px solid rgba(255,255,255,.12)",
         zIndex: 9999,
       }}
     >
       {navItems.map((item) => {
-        const active = location.pathname.startsWith(item.path);
+        const active =
+          item.path === "/"
+            ? location.pathname === "/"
+            : location.pathname.startsWith(item.path);
 
         return (
           <button
             key={item.path}
             onClick={() => navigate(item.path)}
             style={{
-              color: active ? "#4ade80" : "white",
               background: "none",
               border: "none",
-              fontSize: "14px",
               cursor: "pointer",
-              fontWeight: active ? "600" : "400",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "4px",
+              color: active ? "#22c55e" : "#cfcfcf",
+              transition: ".25s",
+              minWidth: "70px",
             }}
           >
-            {item.label}
+            <span
+              style={{
+                fontSize: "24px",
+              }}
+            >
+              {item.label}
+            </span>
+
+            <span
+              style={{
+                fontSize: "12px",
+                fontWeight: active ? 700 : 500,
+              }}
+            >
+              {item.title}
+            </span>
           </button>
         );
       })}
-    </div>
+    </nav>
   );
 }

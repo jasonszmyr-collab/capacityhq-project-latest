@@ -1,26 +1,89 @@
 import { CapacitorHttp } from "@capacitor/core";
+import { Preferences } from "@capacitor/preferences";
 
-export async function findDeviceIP(): Promise<string | null> {
-  const base = "192.168.10."; // adjust if needed
-
-  for (let i = 1; i < 255; i++) {
-    const ip = base + i;
-
-    try {
-      const res = await CapacitorHttp.get({
-        url: `http://${ip}/status`,
-        connectTimeout: 300,
-        readTimeout: 300,
-      });
-
-      if (res.status === 200) {
-        console.log("FOUND DEVICE:", ip);
-        return ip;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  return null;
+export interface DeviceInfo {
+  ip: string;
+  firmware: string;
+  device: string;
 }
+
+class DeviceDiscovery {
+
+  private readonly LAST_IP = "honorpole_last_ip";
+
+  async discover(): Promise<DeviceInfo | null> {
+
+    const saved = await Preferences.get({
+      key: this.LAST_IP
+    });
+
+    const addresses: string[] = [];
+
+    if (saved.value) {
+      addresses.push(`http://${saved.value}`);
+    }
+
+    addresses.push("http://192.168.4.1");
+    addresses.push("http://honorpole.local");
+
+    // Try your current subnet (add more if needed)
+    for (let i = 1; i <= 254; i++) {
+      addresses.push(`http://192.168.0.${i}`);
+    }
+
+    for (const base of addresses) {
+
+      try {
+
+        const response = await CapacitorHttp.request({
+
+          method: "GET",
+
+          url: `${base}/status`,
+
+          connectTimeout: 500,
+
+          readTimeout: 500
+
+        });
+
+        if (response.status !== 200) {
+          continue;
+        }
+
+        const data = response.data;
+
+        if (data.device !== "HonorPole") {
+          continue;
+        }
+
+        const ip = base.replace("http://", "");
+
+        await Preferences.set({
+          key: this.LAST_IP,
+          value: ip
+        });
+
+        console.log("HonorPole Found:", ip);
+
+        return {
+
+          ip,
+
+          firmware: data.firmware,
+
+          device: data.device
+
+        };
+
+      } catch {
+        // Ignore and continue searching
+      }
+
+    }
+
+    return null;
+  }
+}
+
+export const discovery = new DeviceDiscovery();

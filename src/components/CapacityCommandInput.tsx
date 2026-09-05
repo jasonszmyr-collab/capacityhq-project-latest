@@ -11,7 +11,9 @@ export interface CapacityCommandInputProps {
   deviceName?: string;
   currentPosition?: string;
   online?: boolean;
-  onCommandParsed?: (command: 'full' | 'half' | 'down' | 'auto') => void;
+  onCommandParsed?: (
+    command: 'full' | 'half' | 'down' | 'auto' | 'stop'
+) => void;
   onError?: (error: string) => void;
   disabled?: boolean;
 }
@@ -33,10 +35,16 @@ export default function CapacityCommandInput({
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [parsedIntent, setParsedIntent] = useState<'full' | 'half' | 'down' | 'auto' | null>(null);
-
   const isConfigured = capacityService.isConfigured();
-
+  const [parsedIntent, setParsedIntent] =
+    useState<
+        "full" |
+        "half" |
+        "down" |
+        "auto" |
+        "stop" |
+        null
+    >(null);
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 

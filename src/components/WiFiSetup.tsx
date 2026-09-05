@@ -1,83 +1,112 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import AppHeader from "./AppHeader";
 import BottomNav from "./BottomNav";
 
-export default function WiFiScan() {
+import { wifiService } from "../services/wifiService";
+
+export default function WiFiSetup() {
 
   const navigate = useNavigate();
 
+  const [message, setMessage] = useState("Searching for HonorPole...");
+  const [busy, setBusy] = useState(true);
+
   useEffect(() => {
 
-    const checkHonorPole = async () => {
+    let cancelled = false;
 
-      try {
+    const discover = async () => {
 
-        const response = await fetch(
-          "http://192.168.4.1/status"
-        );
+      setBusy(true);
+      setMessage("Searching for HonorPole...");
 
-        if (!response.ok) {
+      // Try several times because the ESP32 may still be rebooting
+      for (let attempt = 1; attempt <= 10; attempt++) {
 
-          alert(
-            "ESP32 returned HTTP " +
-            response.status
-          );
+        if (cancelled) return;
+
+        console.log(`Discovery Attempt ${attempt}`);
+
+        const device = await wifiService.discoverHonorPole();
+
+        if (device) {
+
+          console.log("HonorPole Found", device);
+
+          const status = await wifiService.getDeviceStatus();
+
+          if (!status) {
+
+            setMessage("HonorPole detected.");
+
+            setBusy(false);
+
+            return;
+
+          }
+
+          // Still running as setup AP
+          if (status.apMode === true) {
+
+            navigate("/wifi/scan");
+
+            return;
+
+          }
+
+          // Already connected to router
+          navigate("/");
 
           return;
+
         }
 
-        const data =
-          await response.json();
+        setMessage(`Searching... (${attempt}/10)`);
 
-        console.log(
-          "HonorPole Status:",
-          data
-        );
-
-        alert(
-          JSON.stringify(data)
-        );
-
-        if (
-          data.device === "HonorPole" &&
-          data.apMode === true
-        ) {
-
-          navigate(
-            "/wifi/scan"
-          );
-
-          return;
-        }
-
-        alert(
-          "HonorPole found but not in setup mode."
-        );
-
-      } catch (err: any) {
-
-        console.error("FETCH ERROR:", err);
-
-        alert(
-          "FETCH ERROR:\n\n" +
-          JSON.stringify(err)
-        );
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
       }
 
+      setBusy(false);
+
+      setMessage(
+        "Unable to locate HonorPole. Connect your phone to the HonorPole-Setup WiFi network and try again."
+      );
+
     };
 
-    checkHonorPole();
+    discover();
+
+    return () => {
+
+      cancelled = true;
+
+    };
 
   }, [navigate]);
 
   return (
 
-    <div className="relative min-h-screen">
+    <div className="relative min-h-screen overflow-hidden bg-slate-950">
 
-      <AppHeader title="WiFi Setup" />
+  {/* Waving American flag background */}
+  <video
+    className="absolute inset-0 h-full w-full object-cover"
+    autoPlay
+    muted
+    loop
+    playsInline
+  >
+    <source src="/flag.mp4" type="video/mp4" />
+  </video>
+
+  {/* Dark overlay for readability */}
+  <div className="absolute inset-0 bg-slate-950/60" />
+
+  <div className="relative z-10">
+    <AppHeader title="WiFi Setup" />
 
       <div className="px-6 pt-24 pb-24 text-white">
 
@@ -88,19 +117,29 @@ export default function WiFiScan() {
           </h1>
 
           <p className="text-gray-300">
-            Checking HonorPole device...
+            {message}
           </p>
 
-          <div className="animate-pulse text-blue-400">
-            Connecting to 192.168.4.1
-          </div>
+          {busy && (
+
+            <div className="animate-pulse text-blue-400">
+
+              Discovering HonorPole...
+
+            </div>
+
+          )}
 
         </div>
 
       </div>
 
-      <BottomNav />
+            <BottomNav />
 
-    </div>
+ 	 </div>
+
+	</div>
+
   );
+
 }

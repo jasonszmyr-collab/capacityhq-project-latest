@@ -15,7 +15,7 @@ import AppHeader from "./AppHeader";
 import BottomNav from "./BottomNav";
 
 // Services
-import { findDeviceIP } from "../services/deviceDiscovery";
+import { discovery } from "../services/deviceDiscovery";
 import { sendCommand, getStatus } from "../services/deviceService";
 
 // =======================
@@ -75,6 +75,7 @@ function loadSavedIP(): string | null {
 export default function FlagControlTest() {
   const [deviceIP, setDeviceIP] = useState<string | null>(null);
   const [loadingIP, setLoadingIP] = useState(true);
+  const [deviceOnline, setDeviceOnline] = useState(false);
 
   const [status, setStatus] = useState<any>(null);
 
@@ -104,12 +105,15 @@ export default function FlagControlTest() {
         }
       }
 
-      const ip = await findDeviceIP();
+      const device = await discovery.discover();
 
-      if (ip) {
-        setDeviceIP(ip);
-        saveIP(ip);
-      } else {
+if (device) {
+    setDeviceIP(device.ip);
+
+    saveIP(device.ip);
+}
+
+       else {
         setError("Device not found. Check WiFi.");
       }
 
@@ -126,12 +130,14 @@ export default function FlagControlTest() {
     if (!deviceIP) return;
 
     const fetchStatus = async () => {
-      try {
-        const res = await getStatus(deviceIP);
-        setStatus(res.data);
-      } catch {
-        console.log("Status fetch failed");
-      }
+    try {
+      const res = await getStatus(deviceIP);
+      setStatus(res.data);
+      setDeviceOnline(true);
+    } catch {
+  console.log("Status fetch failed");
+  setDeviceOnline(false);
+}  
     };
 
     fetchStatus();
@@ -246,7 +252,7 @@ export default function FlagControlTest() {
             <CardContent className="flex flex-col gap-4">
 
               <Button
-                disabled={!deviceIP}
+                disabled={!deviceIP || !deviceOnline}
                 onClick={() => handleCommand("UP")}
                 className="bg-green-600 hover:bg-green-700 text-white"
               >
@@ -254,7 +260,7 @@ export default function FlagControlTest() {
               </Button>
 
               <Button
-                disabled={!deviceIP}
+                disabled={!deviceIP || !deviceOnline}
                 onClick={() => handleCommand("DOWN")}
                 className="bg-red-600 hover:bg-red-700 text-white"
               >
@@ -262,7 +268,7 @@ export default function FlagControlTest() {
               </Button>
 
               <Button
-                disabled={!deviceIP}
+                disabled={!deviceIP || !deviceOnline}
                 onClick={() => handleCommand("STOP")}
                 className="bg-yellow-500 hover:bg-yellow-600 text-black"
               >

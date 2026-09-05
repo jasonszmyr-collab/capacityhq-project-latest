@@ -1,5 +1,6 @@
 package com.capacity.app;
 
+import android.content.Intent;
 import android.os.Bundle;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -25,5 +26,12 @@ public class MainActivity extends BridgeActivity {
         );
 
         WebView.setWebContentsDebuggingEnabled(true);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+
+        setIntent(intent);
     }
 }

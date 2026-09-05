@@ -10,6 +10,7 @@ import {
 } from "../services/wifiService";
 
 export default function WifiConnect() {
+
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -19,101 +20,154 @@ export default function WifiConnect() {
   const [loading, setLoading] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
-  // SAFETY: redirect if no network
+  //--------------------------------------------------
+  // Verify a network was selected
+  //--------------------------------------------------
+
   useEffect(() => {
+
     if (!network) {
       navigate("/wifi");
     }
+
   }, [network, navigate]);
 
+  //--------------------------------------------------
+  // Connect HonorPole
+  //--------------------------------------------------
+
   const handleConnect = async () => {
+
     if (!network?.ssid) {
-      setError("No network selected");
+
+      setError("No WiFi network selected.");
+
       return;
+
+    }
+
+    if (password.trim().length === 0) {
+
+      setError("Please enter the WiFi password.");
+
+      return;
+
     }
 
     setLoading(true);
     setError(null);
-    setSuccess(null);
 
     try {
-      const creds: WiFiCredentials = {
+
+      const credentials: WiFiCredentials = {
+
         ssid: network.ssid,
-        password,
+
+        password
+
       };
 
-      const result = await wifiService.sendCredentials(creds);
+      const result =
+        await wifiService.sendCredentials(credentials);
 
-      if (result.success) {
-        setSuccess("✅ Credentials sent successfully");
+      if (!result.success) {
 
-        // Return to WiFi screen after success
-        setTimeout(() => {
-          navigate("/wifi");
-        }, 2000);
+        setError(
+          result.message ||
+          "Unable to connect HonorPole."
+        );
 
-      } else {
-        setError(result.message || "Provisioning failed");
+        setLoading(false);
+
+        return;
+
       }
 
-    } catch {
-      setError("Failed to send credentials");
-    } finally {
+      //--------------------------------------------------
+      // Go to provisioning screen
+      //--------------------------------------------------
+
+      navigate(
+        "/wifi/provisioning",
+        {
+          state: {
+            ssid: network.ssid
+          }
+        }
+      );
+
+    } catch (err: any) {
+
+      console.error(err);
+
+      setError(
+        err?.message ||
+        "Failed to communicate with HonorPole."
+      );
+
       setLoading(false);
+
     }
+
   };
 
+  //--------------------------------------------------
+  // UI
+  //--------------------------------------------------
+
   return (
+
     <div className="relative min-h-screen">
 
-      <AppHeader title="Connect WiFi" />
+      <AppHeader title="Connect to WiFi" />
 
       <div className="px-6 pt-24 pb-24 text-white">
 
         <div className="max-w-md mx-auto space-y-6">
 
-          {/* NETWORK NAME */}
           <div className="text-center">
-            <h2 className="text-xl font-semibold">
-              {network?.ssid || "Unknown Network"}
+
+            <h2 className="text-2xl font-bold">
+
+              {network?.ssid ?? "Unknown Network"}
+
             </h2>
-            <p className="text-gray-300 text-sm">
-              Enter password to connect
+
+            <p className="text-gray-300 mt-2">
+
+              Enter your WiFi password to connect HonorPole.
+
             </p>
+
           </div>
 
-          {/* PASSWORD */}
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="WiFi Password"
-            className="w-full p-3 rounded-lg bg-white/10 border border-white/20 text-white"
+            className="w-full p-4 rounded-xl bg-white/10 border border-white/20 text-white placeholder:text-gray-400"
           />
 
-          {/* ERROR */}
           {error && (
-            <div className="text-red-400 text-sm text-center">
+
+            <div className="text-red-400 text-center">
+
               {error}
+
             </div>
+
           )}
 
-          {/* SUCCESS */}
-          {success && (
-            <div className="text-green-400 text-sm text-center">
-              {success}
-            </div>
-          )}
-
-          {/* BUTTON */}
           <button
             onClick={handleConnect}
             disabled={loading}
-            className="w-full py-3 bg-green-500 rounded-xl font-semibold disabled:opacity-50"
+            className="w-full py-4 bg-green-600 rounded-xl font-bold text-lg disabled:opacity-50"
           >
-            {loading ? "Connecting..." : "Connect"}
+            {loading
+              ? "Connecting HonorPole..."
+              : "Connect HonorPole"}
           </button>
 
         </div>
@@ -121,6 +175,9 @@ export default function WifiConnect() {
       </div>
 
       <BottomNav />
+
     </div>
+
   );
+
 }

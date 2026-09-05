@@ -28,5 +28,5 @@
     },
     "outDir": "dist"
   },
-  "exclude": ["functions", "node_modules"]
+  "exclude": ["functions", "supabase/functions", "node_modules"]
 }

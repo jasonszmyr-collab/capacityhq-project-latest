@@ -3,67 +3,92 @@ import BottomNav from "./BottomNav";
 
 export default function HonorPoleConfig() {
   return (
-    <div className="relative min-h-screen bg-black text-white">
+    <div className="relative min-h-screen overflow-hidden bg-black text-white">
 
-      {/* HEADER */}
-      <AppHeader title="HonorPole Setup" />
+      {/* WAVING FLAG BACKGROUND */}
+      <video
+        className="fixed inset-0 h-full w-full object-cover"
+        autoPlay
+        muted
+        loop
+        playsInline
+        aria-hidden="true"
+      >
+        <source src="/flag.mp4" type="video/mp4" />
+      </video>
 
-      {/* CONTENT */}
-      <div className="p-6 pt-24 pb-24">
-        <div className="max-w-3xl mx-auto text-center space-y-6">
+      {/* DARK OVERLAY FOR READABILITY */}
+      <div className="fixed inset-0 bg-black/55" />
 
-          <h1 className="text-3xl font-bold">
-            Device Setup
-          </h1>
+      {/* APP CONTENT */}
+      <div className="relative z-10 min-h-screen">
 
-          <p className="text-gray-300">
-            Your HonorPole device is already configured and connected.
-          </p>
+        {/* HEADER */}
+        <AppHeader title="HonorPole Setup" />
 
-          {/* DEVICE INFO */}
-          <div className="mt-6 p-4 rounded-lg bg-white/10 space-y-2">
+        {/* CONTENT */}
+        <div className="p-6 pt-24 pb-24">
+          <div className="max-w-3xl mx-auto text-center space-y-6">
 
-            <p>
-              📡 Device IP: <strong>192.168.0.189</strong>
+            <h1 className="text-3xl font-bold">
+              Device Setup
+            </h1>
+
+            <p className="text-gray-200">
+              Use this page to connect or reconfigure your HonorPole device.
             </p>
 
-            <p>
-              🌐 Backend Server: <strong>192.168.0.169:3000</strong>
-            </p>
+            {/* DEVICE INFO */}
+            <div className="mt-6 p-4 rounded-lg bg-black/50 backdrop-blur-sm space-y-2">
 
-            <p>
-              🔌 Status: <span className="text-green-400">Connected</span>
-            </p>
+              <p>
+                Device: <strong>HonorPole</strong>
+              </p>
+
+              <p>
+                Cloud Service: <strong>HonorPole Cloud</strong>
+              </p>
+
+              <p>
+                Connection:{" "}
+                <span className="text-green-400">Ready</span>
+              </p>
+
+            </div>
+
+            {/* INSTRUCTIONS */}
+            <div className="mt-6 p-4 rounded-lg bg-black/50 backdrop-blur-sm text-sm text-gray-200">
+
+              <p>
+                To configure or reconnect WiFi:
+              </p>
+
+              <p className="mt-2 font-semibold text-white">
+                1. Connect your phone to: HonorPole-Setup
+              </p>
+
+              <p>
+                2. Open: http://192.168.4.1
+              </p>
+
+              <p className="mt-2">
+                3. Select your 2.4 GHz WiFi network and enter its password.
+              </p>
+
+              <p className="mt-2">
+                After setup is complete, reconnect your phone to your normal WiFi
+                or cellular connection and return to the HonorPole app.
+              </p>
+
+            </div>
 
           </div>
-
-          {/* INSTRUCTIONS */}
-          <div className="mt-6 p-4 rounded-lg bg-white/10 text-sm text-gray-300">
-
-            <p>
-              If you need to reconfigure WiFi:
-            </p>
-
-            <p className="mt-2 font-semibold text-white">
-              1. Connect to: HonorPole-Setup
-            </p>
-
-            <p>
-              2. Open: http://192.168.4.1
-            </p>
-
-            <p className="mt-2">
-              Then enter your WiFi credentials.
-            </p>
-
-          </div>
-
         </div>
+
+        {/* BOTTOM NAV */}
+        <BottomNav />
+
       </div>
-
-      {/* BOTTOM NAV */}
-      <BottomNav />
-
     </div>
   );
 }

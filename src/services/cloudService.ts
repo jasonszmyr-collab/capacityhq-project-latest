@@ -66,6 +66,7 @@ const MAX_RECONNECT_DELAY = 60000;
 export type CommandType =
     | "full"
     | "half"
+    | "bottom"
     | "down"
     | "auto"
     | "stop";
@@ -543,78 +544,6 @@ private stopTelemetryPolling(): void
         this.clearAuthentication();
     }
 
-    //------------------------------------------------------
-
-    public async loginUser(
-        email: string,
-        password: string
-    ): Promise<LoginResult>
-    {
-        const result =
-            await this.request<LoginResult>(
-                "/auth/login",
-                {
-                    method: "POST",
-
-                    body: JSON.stringify({
-                        email,
-                        password
-                    })
-                }
-            );
-
-        this.setAuthToken(result.token);
-
-        if (result.refreshToken)
-        {
-            this.setRefreshToken(
-                result.refreshToken
-            );
-        }
-
-        this.setUserId(
-            result.userId
-        );
-
-        return result;
-    }
-
-    //------------------------------------------------------
-
-    public async registerUser(
-        email: string,
-        password: string
-    ): Promise<LoginResult>
-    {
-        const result =
-            await this.request<LoginResult>(
-                "/auth/register",
-                {
-                    method: "POST",
-
-                    body: JSON.stringify({
-                        email,
-                        password
-                    })
-                }
-            );
-
-        this.setAuthToken(result.token);
-
-        if (result.refreshToken)
-        {
-            this.setRefreshToken(
-                result.refreshToken
-            );
-        }
-
-        this.setUserId(
-            result.userId
-        );
-
-        return result;
-    }
-
     //======================================================
     // REST Helper
     //======================================================
@@ -739,40 +668,43 @@ private stopTelemetryPolling(): void
 
     //------------------------------------------------------
 
-    public async getDevices():
-        Promise<DeviceInfo[]>
+   public async getDevices():
+    Promise<DeviceInfo[]>
+{
+    if (this.devices.size > 0)
     {
-        if (this.devices.size > 0)
-        {
-            return Array.from(
-                this.devices.values()
-            );
-        }
-
-        try
-        {
-            const devices =
-                await this.request<DeviceInfo[]>(
-                    "/api/devices"
-                );
-
-            devices.forEach(device =>
-            {
-                this.devices.set(
-                    device.deviceId,
-                    device
-                );
-            });
-
-            return devices;
-        }
-        catch
-        {
-            return Array.from(
-                this.devices.values()
-            );
-        }
+        return Array.from(
+            this.devices.values()
+        );
     }
+
+    try
+    {
+        const devices =
+            await this.request<DeviceInfo[]>(
+                "/api/devices"
+            );
+
+        devices.forEach(device =>
+        {
+            this.devices.set(
+                device.deviceId,
+                device
+            );
+        });
+
+        return devices;
+    }
+    catch (error)
+    {
+        console.error(
+            "[Cloud] Failed to load devices:",
+            error
+        );
+
+        throw error;
+    }
+}
 
     //------------------------------------------------------
     // registerDevice() Overloads
@@ -1268,45 +1200,72 @@ private stopTelemetryPolling(): void
     // Connect
     //------------------------------------------------------
 
-    public async connect(): Promise<boolean>
+   public async connect(): Promise<boolean>
+{
+    //--------------------------------------------------
+    // Already Connected
+    //--------------------------------------------------
+
+    if (this.connected)
     {
-        //--------------------------------------------------
-        // Already Connected
-        //--------------------------------------------------
-
-        if (this.localConnected)
-        {
-            return true;
-        }
-
-        //--------------------------------------------------
-        // Discover Device
-        //--------------------------------------------------
-
-        const discovered =
-            await this.discoverDevice();
-
-        if (!discovered)
-        {
-            console.log(
-            "[Cloud] Local device not discovered; continuing with cloud connection."
-        );
-        }
-
-        //--------------------------------------------------
-        // Start WebSocket
-        //--------------------------------------------------
-
-        this.startWebSocket();
-
-        this.connected = true;
-
-        this.startTelemetryPolling();
-
-await this.processQueue();
-
         return true;
     }
+
+    //--------------------------------------------------
+    // Normal Dashboard Connection
+    //
+    // Do NOT perform LAN discovery here.
+    // The normal application communicates through
+    // the cloud/Render service.
+    //
+    // discoverDevice() remains available separately
+    // for setup and provisioning.
+    //--------------------------------------------------
+
+    console.log(
+        "[Cloud] Starting cloud connection."
+    );
+
+    //--------------------------------------------------
+    // Start WebSocket
+    //--------------------------------------------------
+
+    this.startWebSocket();
+
+    //--------------------------------------------------
+    // Enable Cloud Connection
+    //--------------------------------------------------
+
+    this.connected = true;
+
+    this.connectionMode = "cloud";
+
+    //--------------------------------------------------
+    // Start Cloud Telemetry Polling
+    //--------------------------------------------------
+
+    this.startTelemetryPolling();
+
+    //--------------------------------------------------
+    // Process Pending Commands
+    //--------------------------------------------------
+
+    await this.processQueue();
+
+    //--------------------------------------------------
+    // Notify UI
+    //--------------------------------------------------
+
+    this.notifyConnectionSubscribers(
+        true
+    );
+
+    console.log(
+        "[Cloud] Cloud connection started."
+    );
+
+    return true;
+}
 
     //------------------------------------------------------
     // Disconnect
@@ -2383,3 +2342,4 @@ console.log(
     new CloudService();
 
 export default cloudService;   
+

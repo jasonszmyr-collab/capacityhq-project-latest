@@ -1,56 +1,192 @@
 import { useEffect, useState } from "react";
-import { getDeviceStatus } from "../mobile/services/flagApi";
-import { getDirectDeviceStatus } from "./deviceDirect";
 
-export function useSystemStatus() {
-  const [isOnline, setIsOnline] = useState(false);
-  const [compliance, setCompliance] = useState<"FULL" | "HALF">("FULL");
+import cloudService from "../services/cloudService";
 
-  const fetchStatus = async () => {
-    try {
-      // ⚡ STEP 1: Try ESP32 directly
-      let status = await getDirectDeviceStatus();
+//======================================================================
+// Types
+//======================================================================
 
-      // ☁ STEP 2: fallback to cloud
-      if (!status) {
-        status = await getDeviceStatus();
-      }
+export type PhysicalFlagPosition =
+    | "FULL"
+    | "HALF"
+    | "DOWN"
+    | "MOVING"
+    | "UNKNOWN";
 
-      // 🛟 STEP 3: final fallback (review safe)
-      if (!status) {
-        setIsOnline(true);
-        setCompliance("FULL");
-        return;
-      }
+//======================================================================
+// System Status Hook
+//======================================================================
 
-      // 📡 ONLINE
-      setIsOnline(true);
+export function useSystemStatus()
+{
+    const [isOnline, setIsOnline] =
+        useState(false);
 
-      // 🇺🇸 COMPLIANCE
-      if (
-        status?.status?.federalDirective?.active ||
-        status?.status?.stateDirective?.active ||
-        status?.halfStaff === true
-      ) {
-        setCompliance("HALF");
-      } else {
-        setCompliance("FULL");
-      }
+    const [
+        physicalPosition,
+        setPhysicalPosition
+    ] =
+        useState<PhysicalFlagPosition>(
+            "UNKNOWN"
+        );
 
-    } catch (err) {
-      console.error("Status error:", err);
+    useEffect(() =>
+    {
+        function updateStatus()
+        {
+            const telemetry =
+                cloudService.getTelemetry();
 
-      // 🛟 NEVER FAIL UI
-      setIsOnline(true);
-      setCompliance("FULL");
-    }
-  };
+            const connected =
+                cloudService.getConnectionType() !==
+                "offline";
 
-  useEffect(() => {
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 5000);
-    return () => clearInterval(interval);
-  }, []);
+            setIsOnline(
+                connected &&
+                telemetry.online === true
+            );
 
-  return { isOnline, compliance };
+            //--------------------------------------------------
+            // Live Physical Flag Position
+            //--------------------------------------------------
+
+            const current =
+                Number(
+                    telemetry.currentPosition
+                );
+
+            const full =
+                Number(
+                    telemetry.learnedTopPosition
+                );
+
+            //--------------------------------------------------
+            // Movement has priority over stationary position.
+            //--------------------------------------------------
+
+            if (telemetry.moving)
+            {
+                setPhysicalPosition(
+                    "MOVING"
+                );
+
+                return;
+            }
+
+            //--------------------------------------------------
+            // We need valid calibrated position information.
+            //--------------------------------------------------
+
+            if (
+                !Number.isFinite(current) ||
+                !Number.isFinite(full) ||
+                full <= 0
+            )
+            {
+                setPhysicalPosition(
+                    "UNKNOWN"
+                );
+
+                return;
+            }
+
+            const half =
+                full / 2;
+
+            const tolerance =
+                Math.max(
+                    10,
+                    full * 0.02
+                );
+
+            //--------------------------------------------------
+            // Bottom
+            //--------------------------------------------------
+
+            if (
+                Math.abs(current) <=
+                tolerance
+            )
+            {
+                setPhysicalPosition(
+                    "DOWN"
+                );
+
+                return;
+            }
+
+            //--------------------------------------------------
+            // Half Staff
+            //--------------------------------------------------
+
+            if (
+                Math.abs(
+                    current - half
+                ) <= tolerance
+            )
+            {
+                setPhysicalPosition(
+                    "HALF"
+                );
+
+                return;
+            }
+
+            //--------------------------------------------------
+            // Full Staff
+            //--------------------------------------------------
+
+            if (
+                Math.abs(
+                    current - full
+                ) <= tolerance
+            )
+            {
+                setPhysicalPosition(
+                    "FULL"
+                );
+
+                return;
+            }
+
+            //--------------------------------------------------
+            // Between known positions
+            //--------------------------------------------------
+
+            setPhysicalPosition(
+                "UNKNOWN"
+            );
+        }
+
+        updateStatus();
+
+        const unsubscribeTelemetry =
+            cloudService.subscribeTelemetry(
+                () =>
+                {
+                    updateStatus();
+                }
+            );
+
+        const unsubscribeConnection =
+            cloudService.subscribeConnection(
+                () =>
+                {
+                    updateStatus();
+                }
+            );
+
+        return () =>
+        {
+            unsubscribeTelemetry();
+
+            unsubscribeConnection();
+        };
+
+    }, []);
+
+    return {
+        isOnline,
+        physicalPosition
+    };
 }
