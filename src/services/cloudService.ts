@@ -1373,12 +1373,49 @@ console.log(
                 true;
 
             if (status.firmware)
-            {
-                this.telemetry.firmware =
-                    status.firmware;
-            }
+{
+    this.telemetry.firmware =
+        status.firmware;
+}
 
-            this.notifyTelemetrySubscribers();
+// Keep live flag position synchronized with ESP32 telemetry.
+const currentPosition =
+    Number(status.position);
+
+if (Number.isFinite(currentPosition))
+{
+    this.telemetry.currentPosition =
+        currentPosition;
+}
+
+const targetPosition =
+    Number(status.target);
+
+if (Number.isFinite(targetPosition))
+{
+    this.telemetry.targetPosition =
+        targetPosition;
+}
+
+const learnedTopPosition =
+    Number(status.full);
+
+if (
+    Number.isFinite(learnedTopPosition) &&
+    learnedTopPosition > 0
+)
+{
+    this.telemetry.learnedTopPosition =
+        learnedTopPosition;
+}
+
+if (typeof status.moving === "boolean")
+{
+    this.telemetry.moving =
+        status.moving;
+}
+
+this.notifyTelemetrySubscribers();
         }
         catch
         {
