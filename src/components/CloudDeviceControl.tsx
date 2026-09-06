@@ -19,6 +19,7 @@ import {
 } from "../services/cloudService";
 
 import type { DeviceTelemetry } from "../types/telemetry";
+import { setHonorPoleMode } from "../services/honorPoleModeService";
 
 
 export default function CloudDeviceControl()
@@ -60,6 +61,7 @@ export default function CloudDeviceControl()
 
     useEffect(() =>
     {
+
         if (!selectedDevice)
         {
             return;
@@ -146,6 +148,34 @@ export default function CloudDeviceControl()
         command: CommandType
     )
     {
+        // AUTO is an operating mode, never a physical motor command.
+        if (command === "auto")
+        {
+            setLoading(true);
+            setError(null);
+            setSuccess(null);
+
+            try
+            {
+                await setHonorPoleMode("AUTO");
+                setSuccess("Automatic mode enabled.");
+            }
+            catch (err)
+            {
+                setError(
+                    err instanceof Error
+                        ? err.message
+                        : "Failed to enable automatic mode."
+                );
+            }
+            finally
+            {
+                setLoading(false);
+            }
+
+            return;
+        }
+
         if (!selectedDevice)
         {
             return;
@@ -687,6 +717,11 @@ export default function CloudDeviceControl()
     );
 
 }
+
+
+
+
+
 
 
 

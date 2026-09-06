@@ -28,6 +28,8 @@ import type { DeviceTelemetry } from "../types/telemetry";
 import { DefaultTelemetry } from "../types/telemetry";
 
 import { discovery } from "./deviceDiscovery";
+import { CapacitorHttp } from "@capacitor/core";
+import { Preferences } from "@capacitor/preferences";
 
 //======================================================================
 // Configuration
@@ -963,6 +965,32 @@ private stopTelemetryPolling(): void
         }
 
         //--------------------------------------------------
+        // Emergency STOP - Load Saved Local IP
+        //--------------------------------------------------
+
+        if (
+            command === "stop" &&
+            (!this.localConnected || !this.localIP)
+        )
+        {
+            const saved = await Preferences.get({
+                key: "honorpole_last_ip"
+            });
+
+            if (saved.value)
+            {
+                this.localIP =
+                    saved.value.replace("http://", "");
+
+                this.localConnected = true;
+
+                console.log(
+                    "[STOP] Loaded saved local IP:",
+                    this.localIP
+                );
+            }
+        }
+        //--------------------------------------------------
         // Local Preferred
         //--------------------------------------------------
 
@@ -980,7 +1008,16 @@ private stopTelemetryPolling(): void
 
                 if (ok)
                 {
-                    return true;
+                    // Emergency STOP also continues to cloud
+                    // so the server receives STOP as a backup.
+                    if (command !== "stop")
+                    {
+                        return true;
+                    }
+
+                    console.log(
+                        "[STOP] Local STOP sent; sending cloud backup."
+                    );
                 }
             }
             catch (error)
@@ -1035,41 +1072,26 @@ private stopTelemetryPolling(): void
             return false;
         }
 
-        const controller =
-            new AbortController();
-
-        const timeout =
-            window.setTimeout(
-                () => controller.abort(),
-                REQUEST_TIMEOUT
-            );
-
         try
         {
             const response =
-                await fetch(
-                    `http://${this.localIP}/api/command`,
-                    {
-                        method: "POST",
+                await CapacitorHttp.request({
+                    method: "POST",
+                    url: `http://${this.localIP}/api/command`,
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    data: {
+                        command
+                    },
+                    connectTimeout: 1000,
+                    readTimeout: 1000
+                });
 
-                        headers:
-                        {
-                            "Content-Type":
-                                "application/json"
-                        },
-
-                        body: JSON.stringify({
-                            command
-                        }),
-
-                        signal:
-                            controller.signal
-                    }
-                );
-
-            clearTimeout(timeout);
-
-            if (!response.ok)
+            if (
+                response.status < 200 ||
+                response.status >= 300
+            )
             {
                 return false;
             }
@@ -1080,14 +1102,16 @@ private stopTelemetryPolling(): void
 
             return true;
         }
-        catch
+        catch (error)
         {
-            clearTimeout(timeout);
+            console.warn(
+                `[LOCAL] ${command} failed.`,
+                error
+            );
 
             return false;
         }
     }
-
     //------------------------------------------------------
     // Convenience Commands
     //------------------------------------------------------
@@ -2342,4 +2366,15 @@ console.log(
     new CloudService();
 
 export default cloudService;   
+
+
+
+
+
+
+
+
+
+
+
 
