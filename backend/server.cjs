@@ -11,6 +11,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const DEVICE_ID = "HP-001";
 
+const AUTO_CONTROL_SECRET =
+  process.env.AUTO_CONTROL_SECRET || "";
+
 app.use(cors());
 app.use(express.json());
 
@@ -107,6 +110,26 @@ async function requireSupabaseAuth(req, res, next) {
       error: "Authentication service unavailable"
     });
   }
+}
+
+function requireAutoControlAuth(req, res, next) {
+  const providedSecret =
+    typeof req.headers["x-honorpole-auto-secret"] === "string"
+      ? req.headers["x-honorpole-auto-secret"].trim()
+      : "";
+
+  if (
+    !AUTO_CONTROL_SECRET ||
+    !providedSecret ||
+    providedSecret !== AUTO_CONTROL_SECRET
+  ) {
+    return res.status(401).json({
+      success: false,
+      error: "AUTO authentication required"
+    });
+  }
+
+  next();
 }
 
 // =========================================================
@@ -408,6 +431,42 @@ function queueCommand(command, source = "MANUAL") {
 // CONTROL API
 // APP / AUTO / TEST SEND COMMAND
 // =========================================================
+
+app.post("/auto/control", requireAutoControlAuth, (req, res) => {
+  const body = req.body || {};
+
+  const requestedCommand =
+    body.motor ||
+    body.command;
+
+  const motor = normalizeCommand(requestedCommand);
+
+  console.log("POST /auto/control");
+  console.log("BODY:", body);
+
+  if (!motor) {
+    return res.status(400).json({
+      success: false,
+      error: "Invalid or missing motor command",
+      validCommands: Array.from(VALID_COMMANDS)
+    });
+  }
+
+  const queued = queueCommand(
+    motor,
+    "AUTO"
+  );
+
+  res.json({
+    success: true,
+    deviceId: DEVICE_ID,
+    command: queued.motor,
+    commandId: queued.commandId,
+    source: queued.source,
+    status: "queued",
+    createdAt: queued.createdAt
+  });
+});
 
 app.post("/control", requireSupabaseAuth, requireDeviceAccess, (req, res) => {
   const body = req.body || {};
