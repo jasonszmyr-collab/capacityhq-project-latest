@@ -11,6 +11,49 @@ class DeviceDiscovery {
 
   private readonly LAST_IP = "honorpole_last_ip";
 
+  async discoverSaved(): Promise<DeviceInfo | null> {
+
+    const saved = await Preferences.get({
+      key: this.LAST_IP
+    });
+
+    if (!saved.value) {
+      return null;
+    }
+
+    const base = saved.value.startsWith("http://")
+      ? saved.value
+      : `http://${saved.value}`;
+
+    try {
+
+      const response = await CapacitorHttp.request({
+        method: "GET",
+        url: `${base}/status`,
+        connectTimeout: 500,
+        readTimeout: 500
+      });
+
+      if (response.status !== 200) {
+        return null;
+      }
+
+      const data = response.data;
+
+      if (data.device !== "HonorPole") {
+        return null;
+      }
+
+      return {
+        ip: base.replace("http://", ""),
+        firmware: data.firmware,
+        device: data.device
+      };
+
+    } catch {
+      return null;
+    }
+  }
   async discover(): Promise<DeviceInfo | null> {
 
     const saved = await Preferences.get({
@@ -20,7 +63,7 @@ class DeviceDiscovery {
     const addresses: string[] = [];
 
     if (saved.value) {
-      addresses.push(`http://${saved.value}`);
+      addresses.push(saved.value.startsWith("http://") ? saved.value : `http://${saved.value}`);
     }
 
     addresses.push("http://192.168.4.1");
@@ -87,3 +130,4 @@ class DeviceDiscovery {
 }
 
 export const discovery = new DeviceDiscovery();
+

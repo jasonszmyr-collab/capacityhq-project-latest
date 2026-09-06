@@ -305,6 +305,20 @@ export default function Login() {
                   New User / Create Account
                 </button>
               </div>
+              <div className="pt-2 border-t text-center">
+  <p className="text-sm text-gray-600 mb-2">
+    Setting up or reconnecting your HonorPole?
+  </p>
+
+  <button
+    type="button"
+    onClick={() => navigate("/setup")}
+    disabled={loading}
+    className="w-full py-3 rounded-lg border border-black font-medium hover:bg-gray-50 disabled:opacity-50"
+  >
+    Set Up HonorPole Wi-Fi
+  </button>
+</div>
             </>
           )}
 

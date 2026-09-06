@@ -186,29 +186,29 @@ function App() {
           </>
         ) : (
           <Routes>
-            {!user && <Route path="*" element={<Login />} />}
+  {/* Wi-Fi setup must remain available without Internet/login */}
+  <Route path="/wifi" element={<WifiScan />} />
+  <Route path="/setup" element={<WifiScan />} />
+  <Route path="/wifi/scan" element={<WifiScan />} />
+  <Route path="/wifi/connect" element={<WifiConnect />} />
+  <Route
+    path="/wifi/provisioning"
+    element={<ProvisioningProgress />}
+  />
 
-            {user && (
-              <>
-                <Route path="/" element={<HomePage />} />
-                <Route path="/wifi" element={<WifiScan />} />
-                <Route path="/setup" element={<WifiScan />} />
-                <Route path="/cloud" element={<CloudControlPage />} />
-                <Route path="/settings" element={<Settings />} />
-                <Route path="/flag-test" element={<FlagControlTest />} />
+  {!user && <Route path="*" element={<Login />} />}
 
-                <Route path="/wifi/scan" element={<WifiScan />} />
-                <Route path="/wifi/connect" element={<WifiConnect />} />
+  {user && (
+    <>
+      <Route path="/" element={<HomePage />} />
+      <Route path="/cloud" element={<CloudControlPage />} />
+      <Route path="/settings" element={<Settings />} />
+      <Route path="/flag-test" element={<FlagControlTest />} />
 
-                <Route
-                  path="/wifi/provisioning"
-                  element={<ProvisioningProgress />}
-                />
-
-                <Route path="*" element={<Navigate to="/" />} />
-              </>
-            )}
-          </Routes>
+      <Route path="*" element={<Navigate to="/" />} />
+    </>
+  )}
+</Routes>
         )}
       </div>
     </div>

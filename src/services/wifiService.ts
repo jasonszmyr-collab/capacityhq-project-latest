@@ -368,36 +368,35 @@ class WiFiService {
 
             );
 
-            const body =
-                new URLSearchParams({
+            const body = {
 
-                    ssid: credentials.ssid,
+ 		   ssid: credentials.ssid,
 
-                    pass: credentials.password
+ 		   password: credentials.password
 
-                }).toString();
+		};
 
-            const response =
-                await CapacitorHttp.request({
+		const response =
+		    await CapacitorHttp.request({
 
-                    method: "POST",
+		        method: "POST",
 
-                    url: `${this.deviceUrl}/save`,
+		        url: `${this.deviceUrl}/save`,
 
-                    headers: {
+	        headers: {
 
-                        "Content-Type":
-                            "application/x-www-form-urlencoded"
+        	    "Content-Type":
+                	"application/json"
 
-                    },
+        	},
 
-                    data: body,
+		        data: body,
 
-                    connectTimeout: 10000,
+		        connectTimeout: 10000,
 
-                    readTimeout: 10000
+		        readTimeout: 10000
 
-                });
+	    });
 
             if (response.status !== 200) {
 
