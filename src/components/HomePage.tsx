@@ -1594,42 +1594,51 @@ const HomePage = () =>
 
                     {/* ================================================== */}
                     {/* DEVICE HEALTH */}
-                    {/* ================================================== */}
+{/* ================================================== */}
 
-                    <InfoCard title="Device Health">
+<InfoCard title="Device Health">
 
-                        <StatusRow
-                            label="Battery Voltage"
-                            value={
-                                `${device.health?.batteryVoltage ?? 0} V`
-                            }
-                        />
+    <StatusRow
+        label="Battery Voltage"
+        value="Not monitored"
+    />
 
-                        <StatusRow
-                            label="Motor Current"
-                            value={
-                                `${device.health?.motorCurrent ?? 0} A`
-                            }
-                        />
+    <StatusRow
+        label="Motor Current"
+        value="Not monitored"
+    />
 
-                        <StatusRow
-                            label="CPU Temperature"
-                            value={
-                                `${device.health?.cpuTemperature ?? 0} deg`
-                            }
-                        />
+    <StatusRow
+        label="CPU Temperature"
+        value="Not monitored"
+    />
 
-                        <StatusRow
-                            label="Free Memory"
-                            value={
-                                String(
-                                    device.health?.freeMemory ??
-                                    0
-                                )
-                            }
-                        />
+    <StatusRow
+        label="Free Memory"
+        value={
+            device.health?.freeMemory
+                ? `${device.health.freeMemory.toLocaleString()} bytes`
+                : "Waiting for telemetry"
+        }
+    />
 
-                    </InfoCard>
+    <StatusRow
+        label="Uptime"
+        value={
+            device.health?.uptime
+                ? `${device.health.uptime} sec`
+                : "Waiting for telemetry"
+        }
+    />
+
+    <StatusRow
+        label="Last Heartbeat"
+        value={
+            lastSeen || "Waiting for telemetry"
+        }
+    />
+
+</InfoCard>
 
                     {/* ================================================== */}
                     {/* ADMINISTRATION */}

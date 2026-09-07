@@ -254,6 +254,9 @@ calibrated: false,
   ip: "",
   rssi: 0,
 
+  freeMemory: 0,
+  uptime: 0,
+
   // Command delivery
   commandPending: false,
   commandId: null,
@@ -840,6 +843,14 @@ if (typeof data.calibrated === "boolean") {
     deviceState.rssi = data.rssi;
   }
 
+  if (data.freeMemory !== undefined) {
+    deviceState.freeMemory = data.freeMemory;
+  }
+
+  if (data.uptime !== undefined) {
+    deviceState.uptime = data.uptime;
+  }
+
   console.table({
     online: deviceState.online,
     motor: deviceState.motor,
@@ -1044,17 +1055,17 @@ app.get(
       },
 
       health: {
-        batteryVoltage: 0,
-        motorCurrent: 0,
-        cpuTemperature: 0,
-        freeMemory: 0,
-        uptime: 0,
+  batteryVoltage: 0,
+  motorCurrent: 0,
+  cpuTemperature: 0,
+  freeMemory: deviceState.freeMemory || 0,
+  uptime: deviceState.uptime || 0,
 
-        lastHeartbeat:
-          String(
-            deviceState.lastSeen || ""
-          )
-      },
+  lastHeartbeat:
+    String(
+      deviceState.lastSeen || ""
+    )
+},
 
       directives: {
         federal: "",
