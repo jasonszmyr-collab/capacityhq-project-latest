@@ -57,12 +57,14 @@ const DIRECTIVE_STATUS_API =
 // Read Current Government Directive Status
 //----------------------------------------------------------
 
-export async function getHonorPoleDirectiveStatus():
+export async function getHonorPoleDirectiveStatus(
+    deviceId: string
+):
     Promise<HonorPoleDirectiveStatus>
 {
     const response =
         await fetch(
-            DIRECTIVE_STATUS_API,
+            `${DIRECTIVE_STATUS_API}?device_id=${encodeURIComponent(deviceId)}`,
             {
                 method: "GET",
 

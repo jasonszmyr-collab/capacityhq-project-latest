@@ -14,17 +14,19 @@ export interface HonorPoleModeState
 const MODE_API =
     "https://honor-pole-copy-07acad67.base44.app/functions/honorPoleOverrideMode";
 
-const DEVICE_ID = "HP-001";
-
 //----------------------------------------------------------
 // Read Persistent Operating Mode
 //----------------------------------------------------------
 
-export async function getHonorPoleMode():
-    Promise<HonorPoleModeState>
+export async function getHonorPoleMode(
+    device_id: string
+): Promise<HonorPoleModeState>
 {
+    const url =
+        `${MODE_API}?device_id=${encodeURIComponent(device_id)}`;
+
     const response = await fetch(
-        MODE_API,
+        url,
         {
             method: "GET",
             headers:
@@ -49,6 +51,7 @@ export async function getHonorPoleMode():
 //----------------------------------------------------------
 
 export async function setHonorPoleMode(
+    device_id: string,
     override_mode: HonorPoleOverrideMode
 ): Promise<HonorPoleModeState>
 {
@@ -64,7 +67,7 @@ export async function setHonorPoleMode(
             },
 
             body: JSON.stringify({
-                device_id: DEVICE_ID,
+                device_id,
                 override_mode
             })
         }

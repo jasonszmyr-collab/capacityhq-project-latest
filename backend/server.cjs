@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const http = require("http");
 const WebSocket = require("ws");
+const crypto = require("crypto");
 
 console.log("====================================");
 console.log("RUNNING SERVER:", __filename);
@@ -43,8 +44,17 @@ function makeId(prefix = "id") {
 // =========================================================
 
 const SUPABASE_URL =
-  process.env.SUPABASE_URL ||
-  "https://xkgiovddglqxcruwabtm.supabase.co";
+  process.env.SUPABASE_URL || "https://xkgiovddglqxcruwabtm.supabase.co";
+
+const SUPABASE_SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+function hashPairingCode(pairingCode) {
+  return crypto
+    .createHash("sha256")
+    .update(String(pairingCode).trim().toUpperCase())
+    .digest("hex");
+}
 
 async function requireSupabaseAuth(req, res, next) {
   const authorization =
@@ -154,11 +164,18 @@ app.get("/health", (req, res) => {
 
 async function requireDeviceAccess(req, res, next) {
   const deviceId =
-    typeof req.params.deviceId === "string"
-      ? req.params.deviceId.trim()
-      : DEVICE_ID;
+  typeof req.params.deviceId === "string" &&
+  req.params.deviceId.trim()
+    ? req.params.deviceId.trim()
+    : typeof req.body?.device_id === "string" &&
+        req.body.device_id.trim()
+      ? req.body.device_id.trim()
+      : typeof req.body?.deviceId === "string" &&
+          req.body.deviceId.trim()
+        ? req.body.deviceId.trim()
+        : DEVICE_ID;
 
-  if (!deviceId || deviceId !== DEVICE_ID) {
+  if (!deviceId) {
     return res.status(404).json({
       success: false,
       error: "Device not found"
@@ -225,45 +242,65 @@ async function requireDeviceAccess(req, res, next) {
 
 // =========================================================
 // DEVICE STATE
+// One independent state object per HonorPole
 // =========================================================
 
-let deviceState = {
-  // Device
-  deviceId: DEVICE_ID,
+const states = new Map();
 
-  // Connection
-  online: false,
-  lastSeen: Date.now(),
+function createDeviceState(deviceId) {
+  return {
+    // Device
+    deviceId,
 
-  // Motion
-  motor: "STOP",
-  state: "IDLE",
-  status: "idle",
+    // Connection
+    online: false,
+    lastSeen: Date.now(),
 
-  // Position
-position: 0,
-target: 0,
-full: 8000,
-half: 4000,
-percent: 0,
-calibrated: false,
+    // Motion
+    motor: "STOP",
+    state: "IDLE",
+    status: "idle",
 
-  // Network
-  firmware: "4.0.0",
-  wifi: false,
-  ip: "",
-  rssi: 0,
+    // Position
+    position: 0,
+    target: 0,
+    full: 8000,
+    half: 4000,
+    percent: 0,
+    calibrated: false,
 
-  freeMemory: 0,
-  uptime: 0,
+    // Network
+    firmware: "4.0.0",
+    wifi: false,
+    ip: "",
+    rssi: 0,
 
-  // Command delivery
-  commandPending: false,
-  commandId: null,
-  commandSource: null,
-  commandCreatedAt: null,
-  commandDeliveredAt: null
-};
+    freeMemory: 0,
+    uptime: 0,
+
+    // Command delivery
+    commandPending: false,
+    commandId: null,
+    commandSource: null,
+    commandCreatedAt: null,
+    commandDeliveredAt: null
+  };
+}
+
+function getDeviceState(deviceId) {
+  if (!states.has(deviceId)) {
+    states.set(
+      deviceId,
+      createDeviceState(deviceId)
+    );
+  }
+
+  return states.get(deviceId);
+}
+
+// Keep HP-001 initialized so the existing prototype
+// continues to work during the multipole conversion.
+const state = getDeviceState(DEVICE_ID);
 
 // =========================================================
 // SERVER + WEBSOCKET
@@ -279,8 +316,17 @@ const wss = new WebSocket.Server({
 // BROADCAST HELPER
 // =========================================================
 
-function broadcastState() {
-  const data = JSON.stringify(deviceState);
+function broadcastState(deviceId = DEVICE_ID) {
+  const state = getDeviceState(deviceId);
+
+  const data = JSON.stringify({
+    type: "telemetry",
+    deviceId,
+    data: {
+      ...state,
+      deviceId
+    }
+  });
 
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
@@ -298,7 +344,16 @@ wss.on("connection", (ws) => {
 
   ws.isAlive = true;
 
-  ws.send(JSON.stringify(deviceState));
+  ws.send(
+  JSON.stringify({
+    type: "telemetry",
+    deviceId: DEVICE_ID,
+    data: {
+      ...getDeviceState(DEVICE_ID),
+      deviceId: DEVICE_ID
+    }
+  })
+);
 
   ws.on("pong", () => {
     ws.isAlive = true;
@@ -335,15 +390,17 @@ setInterval(() => {
 setInterval(() => {
   const now = Date.now();
 
-  if (
-    deviceState.online &&
-    now - deviceState.lastSeen > 15000
-  ) {
-    console.log("Device marked OFFLINE");
+  for (const [deviceId, state] of states.entries()) {
+    if (
+      state.online &&
+      now - state.lastSeen > 15000
+    ) {
+      console.log("Device marked OFFLINE:", deviceId);
 
-    deviceState.online = false;
+      state.online = false;
 
-    broadcastState();
+      broadcastState(deviceId);
+    }
   }
 }, 5000);
 
@@ -385,7 +442,13 @@ function normalizeCommand(command) {
 // CENTRAL COMMAND QUEUE
 // =========================================================
 
-function queueCommand(command, source = "MANUAL") {
+function queueCommand(deviceId, command, source = "MANUAL") {
+  const targetDeviceId =
+    typeof deviceId === "string" && deviceId.trim()
+      ? deviceId.trim()
+      : DEVICE_ID;
+
+  const targetState = getDeviceState(targetDeviceId);
   const motor = normalizeCommand(command);
 
   if (!motor) {
@@ -395,16 +458,16 @@ function queueCommand(command, source = "MANUAL") {
   const commandId = makeId("cmd");
   const now = Date.now();
 
-  deviceState.motor = motor;
-  deviceState.status = "command_pending";
+  targetState.motor = motor;
+  targetState.status = "command_pending";
 
-  deviceState.commandPending = true;
-  deviceState.commandId = commandId;
-  deviceState.commandSource = source;
-  deviceState.commandCreatedAt = now;
-  deviceState.commandDeliveredAt = null;
+  targetState.commandPending = true;
+  targetState.commandId = commandId;
+  targetState.commandSource = source;
+  targetState.commandCreatedAt = now;
+  targetState.commandDeliveredAt = null;
 
-  commandsByDevice.set(DEVICE_ID, {
+  commandsByDevice.set(targetDeviceId, {
     commandId,
     motor,
     source,
@@ -414,13 +477,13 @@ function queueCommand(command, source = "MANUAL") {
 
   console.log("------------------------------------");
   console.log("COMMAND QUEUED");
-  console.log("Device :", DEVICE_ID);
+  console.log("Device :", targetDeviceId);
   console.log("Command:", motor);
   console.log("Source :", source);
   console.log("ID     :", commandId);
   console.log("------------------------------------");
 
-  broadcastState();
+  broadcastState(targetDeviceId);
 
   return {
     commandId,
@@ -444,7 +507,15 @@ app.post("/auto/control", requireAutoControlAuth, (req, res) => {
 
   const motor = normalizeCommand(requestedCommand);
 
+  const deviceId =
+    typeof body.device_id === "string" && body.device_id.trim()
+      ? body.device_id.trim()
+      : typeof body.deviceId === "string" && body.deviceId.trim()
+        ? body.deviceId.trim()
+        : DEVICE_ID;
+
   console.log("POST /auto/control");
+  console.log("DEVICE:", deviceId);
   console.log("BODY:", body);
 
   if (!motor) {
@@ -456,13 +527,14 @@ app.post("/auto/control", requireAutoControlAuth, (req, res) => {
   }
 
   const queued = queueCommand(
+    deviceId,
     motor,
     "AUTO"
   );
 
   res.json({
     success: true,
-    deviceId: DEVICE_ID,
+    deviceId,
     command: queued.motor,
     commandId: queued.commandId,
     source: queued.source,
@@ -471,47 +543,62 @@ app.post("/auto/control", requireAutoControlAuth, (req, res) => {
   });
 });
 
-app.post("/control", requireSupabaseAuth, requireDeviceAccess, (req, res) => {
-  const body = req.body || {};
+app.post(
+  "/control",
+  requireSupabaseAuth,
+  requireDeviceAccess,
+  (req, res) => {
+    const body = req.body || {};
 
-  const requestedCommand =
-    body.motor ||
-    body.command;
+    const requestedCommand =
+      body.motor ||
+      body.command;
 
-  const source =
-    typeof body.source === "string" &&
-    body.source.trim()
-      ? body.source.trim().toUpperCase()
-      : "MANUAL";
+    const deviceId =
+      typeof body.device_id === "string" && body.device_id.trim()
+        ? body.device_id.trim()
+        : typeof body.deviceId === "string" && body.deviceId.trim()
+          ? body.deviceId.trim()
+          : DEVICE_ID;
 
-  const motor = normalizeCommand(requestedCommand);
+    const source =
+      typeof body.source === "string" &&
+      body.source.trim()
+        ? body.source.trim().toUpperCase()
+        : "MANUAL";
 
-  console.log("POST /control");
-  console.log("BODY:", body);
+    const motor = normalizeCommand(requestedCommand);
 
-  if (!motor) {
-    return res.status(400).json({
-      success: false,
-      error: "Invalid or missing motor command",
-      validCommands: Array.from(VALID_COMMANDS)
+    console.log("POST /control");
+    console.log("DEVICE:", deviceId);
+    console.log("BODY:", body);
+
+    if (!motor) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid or missing motor command",
+        validCommands: Array.from(VALID_COMMANDS)
+      });
+    }
+
+    const queued = queueCommand(
+      deviceId,
+      motor,
+      source
+    );
+
+    res.json({
+      success: true,
+      deviceId,
+      command: queued.motor,
+      commandId: queued.commandId,
+      source: queued.source,
+      status: "queued",
+      createdAt: queued.createdAt
     });
   }
+);
 
-  const queued = queueCommand(
-    motor,
-    source
-  );
-
-  res.json({
-    success: true,
-    deviceId: DEVICE_ID,
-    command: queued.motor,
-    commandId: queued.commandId,
-    source: queued.source,
-    status: "queued",
-    createdAt: queued.createdAt
-  });
-});
 // =========================================================
 // DEVICE COMMAND COMPATIBILITY ENDPOINT
 // Mobile / Dashboard -> Central Command Queue
@@ -522,14 +609,17 @@ app.post(
   requireSupabaseAuth,
   requireDeviceAccess,
   (req, res) => {
-    if (
-      req.params.deviceId !== DEVICE_ID
-    ) {
-      return res.status(404).json({
-        success: false,
-        error: "Device not found"
-      });
-    }
+    const deviceId =
+  typeof req.params.deviceId === "string"
+    ? req.params.deviceId.trim()
+    : "";
+
+if (!deviceId) {
+  return res.status(404).json({
+    success: false,
+    error: "Device not found"
+  });
+}
 
     const body = req.body || {};
 
@@ -574,16 +664,16 @@ app.post(
       });
     }
 
-    const queued =
-      queueCommand(
-        motor,
-        source
-      );
+const queued =
+  queueCommand(
+    deviceId,
+    motor,
+    source
+  );
 
     res.json({
       success: true,
-      deviceId:
-        DEVICE_ID,
+      deviceId,
       command:
         queued.motor,
       commandId:
@@ -602,30 +692,43 @@ app.post(
 // =========================================================
 
 app.get("/control", (req, res) => {
+  const deviceId =
+    typeof req.query.device_id === "string" &&
+    req.query.device_id.trim()
+      ? req.query.device_id.trim()
+      : typeof req.query.deviceId === "string" &&
+          req.query.deviceId.trim()
+        ? req.query.deviceId.trim()
+        : DEVICE_ID;
+
+  const state = getDeviceState(deviceId);
+
   let motor = "STOP";
 
-  if (deviceState.commandPending) {
-    motor = deviceState.motor;
+  if (state.commandPending) {
+    motor = state.motor;
   }
 
   const response = {
+    deviceId,
     motor,
-    status: deviceState.status,
-    lastSeen: deviceState.lastSeen,
+    status: state.status,
+    lastSeen: state.lastSeen,
 
     commandId:
-      deviceState.commandPending
-        ? deviceState.commandId
+      state.commandPending
+        ? state.commandId
         : null,
 
     source:
-      deviceState.commandPending
-        ? deviceState.commandSource
+      state.commandPending
+        ? state.commandSource
         : null
   };
 
   console.log(
     "GET /control ->",
+    deviceId,
     response.motor,
     response.commandId || ""
   );
@@ -637,30 +740,30 @@ app.get("/control", (req, res) => {
   // Mark command as delivered after ESP32 retrieved it.
   // -------------------------------------------------------
 
-  if (deviceState.commandPending) {
+  if (state.commandPending) {
     const deliveredCommand =
-      deviceState.motor;
+      state.motor;
 
     const deliveredCommandId =
-      deviceState.commandId;
+      state.commandId;
 
     const deliveredAt =
       Date.now();
 
     console.log("------------------------------------");
     console.log("COMMAND DELIVERED");
-    console.log("Device :", DEVICE_ID);
+    console.log("Device :", deviceId);
     console.log("Command:", deliveredCommand);
-    console.log("Source :", deviceState.commandSource);
+    console.log("Source :", state.commandSource);
     console.log("ID     :", deliveredCommandId);
     console.log("------------------------------------");
 
-    deviceState.commandPending = false;
-    deviceState.commandDeliveredAt = deliveredAt;
-    deviceState.status = "delivered";
+    state.commandPending = false;
+    state.commandDeliveredAt = deliveredAt;
+    state.status = "delivered";
 
     const stored =
-      commandsByDevice.get(DEVICE_ID);
+      commandsByDevice.get(deviceId);
 
     if (
       stored &&
@@ -669,19 +772,16 @@ app.get("/control", (req, res) => {
       stored.deliveredAt = deliveredAt;
 
       commandsByDevice.set(
-        DEVICE_ID,
+        deviceId,
         stored
       );
     }
 
-    // IMPORTANT:
-    //
-    // Do NOT reset deviceState.motor here.
-    //
-    // The ESP32 telemetry is authoritative for
-    // the actual motor state after command delivery.
+    // Do NOT reset state.motor here.
+    // ESP32 telemetry remains authoritative
+    // for actual motor state after delivery.
 
-    broadcastState();
+    broadcastState(deviceId);
   }
 });
 
@@ -694,10 +794,20 @@ app.post("/status", (req, res) => {
 
   const data = req.body || {};
 
+  const deviceId =
+    typeof data.device_id === "string" && data.device_id.trim()
+      ? data.device_id.trim()
+      : typeof data.deviceId === "string" && data.deviceId.trim()
+        ? data.deviceId.trim()
+        : DEVICE_ID;
+
+  const state = getDeviceState(deviceId);
+
+  console.log("DEVICE:", deviceId);
   console.log("ESP32 STATUS BODY:", JSON.stringify(data));
 
-  deviceState.online = true;
-  deviceState.lastSeen = Date.now();
+  state.online = true;
+  state.lastSeen = Date.now();
 
   // -------------------------------------------------------
   // Only allow ESP32 telemetry to replace motor state
@@ -717,7 +827,7 @@ app.post("/status", (req, res) => {
   // telemetry becomes authoritative for actual motion state.
   // -------------------------------------------------------
 
-  if (!deviceState.commandPending) {
+  if (!state.commandPending) {
   const espMode =
     data.mode !== undefined
       ? String(data.mode).trim().toUpperCase()
@@ -733,29 +843,29 @@ app.post("/status", (req, res) => {
 
   // Preserve the firmware mode separately for diagnostics.
   if (data.mode !== undefined) {
-    deviceState.state = data.mode;
+    state.state = data.mode;
   } else if (data.state !== undefined) {
-    deviceState.state = data.state;
+    state.state = data.state;
   }
 
   // Explicit firmware error states take priority.
   if (espMode === "ERROR") {
-    deviceState.motor = "STOP";
-    deviceState.status = "error";
+    state.motor = "STOP";
+    state.status = "error";
   }
 
   // Calibration/homing are special operating states.
   else if (espMode === "HOMING") {
-    deviceState.status = "homing";
+    state.status = "homing";
   }
 
   else if (espMode === "CALIBRATING") {
-    deviceState.status = "calibrating";
+    state.status = "calibrating";
   }
 
   // Explicit moving=true is authoritative proof of motion.
   else if (espMoving) {
-    deviceState.status = "moving";
+    state.status = "moving";
   }
 
   // Explicit moving=false is authoritative proof that
@@ -764,59 +874,59 @@ app.post("/status", (req, res) => {
     hasMovingTelemetry &&
     data.moving === false
   ) {
-    deviceState.motor = "STOP";
-    deviceState.status = "idle";
+    state.motor = "STOP";
+    state.status = "idle";
   }
 
   // If moving telemetry is absent, use the firmware mode.
   else if (espMode === "MOVING") {
-    deviceState.status = "moving";
+    state.status = "moving";
   }
 
   else if (espMode === "IDLE") {
-    deviceState.motor = "STOP";
-    deviceState.status = "idle";
+    state.motor = "STOP";
+    state.status = "idle";
   }
 }
 
 console.log("NORMALIZE RESULT", {
-  motor: deviceState.motor,
-  status: deviceState.status,
-  state: deviceState.state
+  motor: state.motor,
+  status: state.status,
+  state: state.state
 });
 
   if (data.position !== undefined) {
-    deviceState.position = data.position;
+    state.position = data.position;
   }
 
   if (data.target !== undefined) {
-    deviceState.target = data.target;
+    state.target = data.target;
   }
 
   if (data.full !== undefined) {
-  deviceState.full = data.full;
+  state.full = data.full;
 }
 
 if (data.half !== undefined) {
-  deviceState.half = data.half;
+  state.half = data.half;
 }
 
 // Calculate physical travel percentage from authoritative
 // position/full telemetry when the ESP32 does not send percent.
 if (data.percent !== undefined) {
-  deviceState.percent = data.percent;
+  state.percent = data.percent;
 } else if (
-  Number.isFinite(Number(deviceState.position)) &&
-  Number.isFinite(Number(deviceState.full)) &&
-  Number(deviceState.full) > 0
+  Number.isFinite(Number(state.position)) &&
+  Number.isFinite(Number(state.full)) &&
+  Number(state.full) > 0
 ) {
-  deviceState.percent = Math.max(
+  state.percent = Math.max(
     0,
     Math.min(
       100,
       Math.round(
-        (Number(deviceState.position) /
-          Number(deviceState.full)) *
+        (Number(state.position) /
+          Number(state.full)) *
           100
       )
     )
@@ -824,52 +934,51 @@ if (data.percent !== undefined) {
 }
 
 if (typeof data.calibrated === "boolean") {
-  deviceState.calibrated = data.calibrated;
+  state.calibrated = data.calibrated;
 }
 
-  if (data.firmware !== undefined) {
-    deviceState.firmware = data.firmware;
-  }
+if (data.firmware !== undefined) {
+  state.firmware = data.firmware;
+}
 
-  if (data.wifi !== undefined) {
-    deviceState.wifi = data.wifi;
-  }
+if (data.wifi !== undefined) {
+  state.wifi = data.wifi;
+}
 
-  if (data.ip !== undefined) {
-    deviceState.ip = data.ip;
-  }
+if (data.ip !== undefined) {
+  state.ip = data.ip;
+}
 
-  if (data.rssi !== undefined) {
-    deviceState.rssi = data.rssi;
-  }
+if (data.rssi !== undefined) {
+  state.rssi = data.rssi;
+}
 
-  if (data.freeMemory !== undefined) {
-    deviceState.freeMemory = data.freeMemory;
-  }
+if (data.freeMemory !== undefined) {
+  state.freeMemory = data.freeMemory;
+}
 
-  if (data.uptime !== undefined) {
-    deviceState.uptime = data.uptime;
-  }
+if (data.uptime !== undefined) {
+  state.uptime = data.uptime;
+}
 
-  console.table({
-    online: deviceState.online,
-    motor: deviceState.motor,
-    state: deviceState.state,
-    status: deviceState.status,
-    position: deviceState.position,
-    target: deviceState.target,
-    full: deviceState.full,
-    half: deviceState.half,
-    percent: deviceState.percent,
-    firmware: deviceState.firmware,
-    wifi: deviceState.wifi,
-    ip: deviceState.ip,
-    rssi: deviceState.rssi,
-    commandPending:
-      deviceState.commandPending
-  });
+console.table({
+  online: state.online,
+  motor: state.motor,
+  state: state.state,
+  status: state.status,
+  position: state.position,
+  target: state.target,
+  full: state.full,
+  half: state.half,
+  percent: state.percent,
+  firmware: state.firmware,
+  wifi: state.wifi,
+  ip: state.ip,
+  rssi: state.rssi,
+  commandPending: state.commandPending
+});
 
-  broadcastState();
+  broadcastState(deviceId);
 
   res.json({
     success: true,
@@ -883,58 +992,395 @@ if (typeof data.calibrated === "boolean") {
 
 app.get("/status", (req, res) => {
   res.json({
-    deviceId: DEVICE_ID,
+    deviceId,
 
-    online: deviceState.online,
-    status: deviceState.status,
-    state: deviceState.state,
-    motor: deviceState.motor,
+    online: state.online,
+status: state.status,
+state: state.state,
+motor: state.motor,
 
-    position: deviceState.position,
-    target: deviceState.target,
-    full: deviceState.full,
-    half: deviceState.half,
-    percent: deviceState.percent,
+position: state.position,
+target: state.target,
+full: state.full,
+half: state.half,
+percent: state.percent,
 
-    firmware: deviceState.firmware,
-    wifi: deviceState.wifi,
-    ip: deviceState.ip,
-    rssi: deviceState.rssi,
+firmware: state.firmware,
+wifi: state.wifi,
+ip: state.ip,
+rssi: state.rssi,
 
-    lastSeen: deviceState.lastSeen,
+lastSeen: state.lastSeen,
 
-    command: {
-      pending: deviceState.commandPending,
-      id: deviceState.commandId,
-      source: deviceState.commandSource,
-      createdAt: deviceState.commandCreatedAt,
-      deliveredAt: deviceState.commandDeliveredAt
-    }
-  });
+command: {
+  pending: state.commandPending,
+  id: state.commandId,
+  source: state.commandSource,
+  createdAt: state.commandCreatedAt,
+  deliveredAt: state.commandDeliveredAt
+}
+});
 });
 
 // =========================================================
-// DEVICE DISCOVERY COMPATIBILITY ENDPOINT
+// DEVICE PAIRING / CLAIM
+// Claims an unpaired HonorPole for the authenticated user.
 // =========================================================
 
-app.get("/api/devices", requireSupabaseAuth, requireDeviceAccess, (req, res) => {
-  res.json([
-    {
-      deviceId: DEVICE_ID,
-      deviceName: "HonorPole",
-      firmware:
-        deviceState.firmware || "--",
-      serialNumber: DEVICE_ID,
-      ipAddress:
-        deviceState.ip || "",
-      online:
-        deviceState.online === true,
-      lastSeen:
-        String(deviceState.lastSeen || ""),
-      signalStrength:
-        deviceState.rssi || 0
+app.post(
+  "/api/device/register",
+  requireSupabaseAuth,
+  async (req, res) => {
+    if (!req.user?.id) {
+      return res.status(401).json({
+        success: false,
+        error: "Authentication required"
+      });
     }
-  ]);
+
+    if (!SUPABASE_SERVICE_ROLE_KEY) {
+      console.error(
+        "SUPABASE_SERVICE_ROLE_KEY is not configured"
+      );
+
+      return res.status(503).json({
+        success: false,
+        error: "Device pairing is unavailable"
+      });
+    }
+
+    const pairingCode =
+      typeof req.body?.pairingCode === "string"
+        ? req.body.pairingCode.trim().toUpperCase()
+        : "";
+
+    const deviceName =
+      typeof req.body?.deviceName === "string"
+        ? req.body.deviceName.trim()
+        : "";
+
+    if (!pairingCode) {
+      return res.status(400).json({
+        success: false,
+        error: "Pairing code is required"
+      });
+    }
+
+    const pairingCodeHash =
+      hashPairingCode(pairingCode);
+
+    try {
+      const deviceUrl =
+        `${SUPABASE_URL}/rest/v1/devices` +
+        `?pairing_code_hash=eq.${encodeURIComponent(pairingCodeHash)}` +
+        `&is_active=eq.true` +
+        `&select=*` +
+        `&limit=1`;
+
+      const deviceResponse = await fetch(
+        deviceUrl,
+        {
+          method: "GET",
+          headers: {
+            apikey: SUPABASE_SERVICE_ROLE_KEY
+          }
+        }
+      );
+
+      if (!deviceResponse.ok) {
+        const details =
+          await deviceResponse.text();
+
+        console.error(
+          "Pairing device lookup failed:",
+          deviceResponse.status,
+          details
+        );
+
+        return res.status(502).json({
+          success: false,
+          error: "Unable to verify pairing code"
+        });
+      }
+
+      const devices =
+        await deviceResponse.json();
+
+      const device = devices?.[0];
+
+      if (!device) {
+        return res.status(404).json({
+          success: false,
+          error: "Invalid pairing code"
+        });
+      }
+
+      if (device.pairing_claimed_at) {
+        return res.status(409).json({
+          success: false,
+          error: "Pairing code has already been used"
+        });
+      }
+
+      if (
+        device.pairing_code_expires_at &&
+        new Date(device.pairing_code_expires_at).getTime() <
+          Date.now()
+      ) {
+        return res.status(410).json({
+          success: false,
+          error: "Pairing code has expired"
+        });
+      }
+      const serviceHeaders = {
+  Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+  apikey: SUPABASE_SERVICE_ROLE_KEY,
+  "Content-Type": "application/json"
+};
+
+const membershipResponse = await fetch(
+  `${SUPABASE_URL}/rest/v1/device_users`,
+  {
+    method: "POST",
+    headers: {
+      ...serviceHeaders,
+      Prefer: "resolution=ignore-duplicates,return=representation"
+    },
+    body: JSON.stringify({
+      device_id: device.device_id,
+      user_id: req.user.id,
+      role: "admin"
+    })
+  }
+);
+
+if (!membershipResponse.ok) {
+  const details = await membershipResponse.text();
+
+  console.error(
+    "Device membership creation failed:",
+    membershipResponse.status,
+    details
+  );
+
+  return res.status(502).json({
+    success: false,
+    error: "Unable to assign device"
+  });
+}
+
+const claimedAt = new Date().toISOString();
+
+const claimResponse = await fetch(
+  `${SUPABASE_URL}/rest/v1/devices` +
+    `?device_id=eq.${encodeURIComponent(device.device_id)}`,
+  {
+    method: "PATCH",
+    headers: {
+      ...serviceHeaders,
+      Prefer: "return=representation"
+    },
+    body: JSON.stringify({
+      pairing_claimed_at: claimedAt
+    })
+  }
+);
+
+if (!claimResponse.ok) {
+  const details = await claimResponse.text();
+
+  console.error(
+    "Pairing claim update failed:",
+    claimResponse.status,
+    details
+  );
+
+  return res.status(502).json({
+    success: false,
+    error: "Unable to finalize device pairing"
+  });
+}
+
+
+      return res.status(200).json({
+        success: true,
+        verified: true,
+        deviceId: device.device_id,
+        deviceName:
+          deviceName ||
+          device.name ||
+          "HonorPole"
+      });
+    } catch (error) {
+      console.error(
+        "Device pairing verification failed:",
+        error instanceof Error
+          ? error.message
+          : "Unknown error"
+      );
+
+      return res.status(500).json({
+        success: false,
+        error: "Device pairing failed"
+      });
+    }
+  }
+);
+
+// =========================================================
+// DEVICE DISCOVERY
+// Returns every HonorPole assigned to the authenticated user.
+// =========================================================
+
+app.get("/api/devices", requireSupabaseAuth, async (req, res) => {
+  if (!req.accessToken || !req.user?.id) {
+    return res.status(401).json({
+      success: false,
+      error: "Authentication required"
+    });
+  }
+
+  try {
+    // -----------------------------------------------------
+    // Find all device memberships for this user
+    // -----------------------------------------------------
+
+    const membershipUrl =
+      `${SUPABASE_URL}/rest/v1/device_users` +
+      `?user_id=eq.${encodeURIComponent(req.user.id)}` +
+      `&select=device_id,role`;
+
+    const membershipResponse = await fetch(
+      membershipUrl,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${req.accessToken}`,
+          apikey: process.env.SUPABASE_ANON_KEY || ""
+        }
+      }
+    );
+
+    if (!membershipResponse.ok) {
+      console.error(
+        "Device membership lookup failed:",
+        membershipResponse.status
+      );
+
+      return res.status(503).json({
+        success: false,
+        error: "Unable to load HonorPoles"
+      });
+    }
+
+    const memberships =
+      await membershipResponse.json();
+
+    if (
+      !Array.isArray(memberships) ||
+      memberships.length === 0
+    ) {
+      return res.json([]);
+    }
+
+    const deviceIds =
+      memberships
+        .map(item => item.device_id)
+        .filter(Boolean);
+
+    if (deviceIds.length === 0) {
+      return res.json([]);
+    }
+
+    // -----------------------------------------------------
+    // Load the actual device records
+    // -----------------------------------------------------
+
+    const encodedIds =
+      deviceIds
+        .map(id => `"${String(id).replace(/"/g, "")}"`)
+        .join(",");
+
+    const devicesUrl =
+      `${SUPABASE_URL}/rest/v1/devices` +
+      `?device_id=in.(${encodeURIComponent(encodedIds)})` +
+      `&select=device_id,name,city,state,zip_code,county,timezone,latitude,longitude,country,firmware_version,online,last_seen`;
+
+    const devicesResponse = await fetch(
+      devicesUrl,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${req.accessToken}`,
+          apikey: process.env.SUPABASE_ANON_KEY || ""
+        }
+      }
+    );
+
+    if (!devicesResponse.ok) {
+      console.error(
+        "Device list lookup failed:",
+        devicesResponse.status
+      );
+
+      return res.status(503).json({
+        success: false,
+        error: "Unable to load HonorPoles"
+      });
+    }
+
+    const rows =
+      await devicesResponse.json();
+
+    const devices =
+      Array.isArray(rows)
+        ? rows.map(row => ({
+            deviceId: row.device_id,
+            deviceName:
+              row.name || row.device_id,
+            firmware:
+              row.firmware_version || "--",
+            serialNumber:
+              row.device_id,
+            online:
+              row.online === true,
+            lastSeen:
+              String(row.last_seen || ""),
+
+            city:
+              row.city || "",
+            state:
+              row.state || "",
+            zipCode:
+              row.zip_code || "",
+            county:
+              row.county || "",
+            timezone:
+              row.timezone || "",
+            latitude:
+              row.latitude ?? null,
+            longitude:
+              row.longitude ?? null,
+            country:
+              row.country || "US"
+          }))
+        : [];
+
+    return res.json(devices);
+  }
+  catch (error) {
+    console.error(
+      "Device discovery failed:",
+      error instanceof Error
+        ? error.message
+        : "Unknown error"
+    );
+
+    return res.status(503).json({
+      success: false,
+      error: "Unable to load HonorPoles"
+    });
+  }
 });
 
 // =========================================================
@@ -946,22 +1392,27 @@ app.get(
   requireSupabaseAuth,
   requireDeviceAccess,
   (req, res) => {
-    if (
-      req.params.deviceId !== DEVICE_ID
-    ) {
-      return res.status(404).json({
-        error: "Device not found"
-      });
-    }
+    const deviceId =
+  typeof req.params.deviceId === "string"
+    ? req.params.deviceId.trim()
+    : "";
+
+if (!deviceId) {
+  return res.status(404).json({
+    error: "Device not found"
+  });
+}
+
+const state = getDeviceState(deviceId);
 
     let movement = "STOPPED";
 
     const motor =
-      String(deviceState.motor || "")
+      String(state.motor || "")
         .toUpperCase();
 
     const status =
-      String(deviceState.status || "")
+      String(state.status || "")
         .toLowerCase();
 
     if (status === "moving") {
@@ -980,28 +1431,28 @@ app.get(
 
     res.json({
       online:
-        deviceState.online === true,
+        state.online === true,
 
       firmware:
-        deviceState.firmware || "--",
+        state.firmware || "--",
 
       hardware:
         "ESP32-S3",
 
       serialNumber:
-        DEVICE_ID,
+        deviceId,
 
       deviceName:
         "HonorPole",
 
       currentPosition:
-        deviceState.position || 0,
+        state.position || 0,
 
       targetPosition:
-        deviceState.target || 0,
+        state.target || 0,
 
       learnedTopPosition:
-        deviceState.full || 0,
+        state.full || 0,
 
       movement,
 
@@ -1012,34 +1463,34 @@ app.get(
         true,
 
       calibrated:
-        deviceState.calibrated === true,
+        state.calibrated === true,
 
       commandStatus:
-        deviceState.status || "idle",
+        state.status || "idle",
 
       command: {
         pending:
-          deviceState.commandPending,
+          state.commandPending,
 
         id:
-          deviceState.commandId,
+          state.commandId,
 
         source:
-          deviceState.commandSource,
+          state.commandSource,
 
         createdAt:
-          deviceState.commandCreatedAt,
+          state.commandCreatedAt,
 
         deliveredAt:
-          deviceState.commandDeliveredAt
+          state.commandDeliveredAt
       },
 
       network: {
         wifiConnected:
-          deviceState.wifi === true,
+          state.wifi === true,
 
         cloudConnected:
-          deviceState.online === true,
+          state.online === true,
 
         websocketConnected:
           false,
@@ -1048,22 +1499,22 @@ app.get(
           "",
 
         ipAddress:
-          deviceState.ip || "",
+          state.ip || "",
 
         signalStrength:
-          deviceState.rssi || 0
+          state.rssi || 0
       },
 
       health: {
   batteryVoltage: 0,
   motorCurrent: 0,
   cpuTemperature: 0,
-  freeMemory: deviceState.freeMemory || 0,
-  uptime: deviceState.uptime || 0,
+  freeMemory: state.freeMemory || 0,
+  uptime: state.uptime || 0,
 
   lastHeartbeat:
     String(
-      deviceState.lastSeen || ""
+      state.lastSeen || ""
     )
 },
 

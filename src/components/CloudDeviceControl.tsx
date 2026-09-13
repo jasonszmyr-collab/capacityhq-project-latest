@@ -47,6 +47,21 @@ export default function CloudDeviceControl()
         useState<string | null>(null);
 
     //--------------------------------------------------
+    // Select Active HonorPole
+    //--------------------------------------------------
+
+    function selectDevice(device: DeviceInfo)
+    {
+        cloudService.setDevice(device);
+
+        setSelectedDevice(
+            device.deviceId
+        );
+
+        setTelemetry(null);
+    }
+
+    //--------------------------------------------------
     // Initial Load
     //--------------------------------------------------
 
@@ -99,9 +114,18 @@ export default function CloudDeviceControl()
                 !selectedDevice
             )
             {
-                setSelectedDevice(
-                    list[0].deviceId
-                );
+                const currentDeviceId =
+                    cloudService.getCurrentDeviceId();
+
+                const deviceToSelect =
+                    list.find(
+                        device =>
+                            device.deviceId ===
+                            currentDeviceId
+                    )
+                    ?? list[0];
+
+                selectDevice(deviceToSelect);
             }
         }
         catch (err)
@@ -141,67 +165,34 @@ export default function CloudDeviceControl()
     }
 
     //--------------------------------------------------
-    // Send Command
-    //--------------------------------------------------
+// Send Command
+//--------------------------------------------------
 
-    async function handleCommand(
-        command: CommandType
-    )
+async function handleCommand(
+    command: CommandType
+)
+{
+    if (!selectedDevice)
     {
-        // AUTO is an operating mode, never a physical motor command.
-        if (command === "auto")
-        {
-            setLoading(true);
-            setError(null);
-            setSuccess(null);
+        return;
+    }
 
-            try
-            {
-                await setHonorPoleMode("AUTO");
-                setSuccess("Automatic mode enabled.");
-            }
-            catch (err)
-            {
-                setError(
-                    err instanceof Error
-                        ? err.message
-                        : "Failed to enable automatic mode."
-                );
-            }
-            finally
-            {
-                setLoading(false);
-            }
-
-            return;
-        }
-
-        if (!selectedDevice)
-        {
-            return;
-        }
-
+    // AUTO is an operating mode, never a physical motor command.
+    if (command === "auto")
+    {
         setLoading(true);
         setError(null);
         setSuccess(null);
 
         try
         {
-            const sent = await cloudService.sendCommand(
+            await setHonorPoleMode(
                 selectedDevice,
-                command
+                "AUTO"
             );
-
-            if (!sent) {
-                throw new Error("Command could not be delivered.");
-            }
 
             setSuccess(
-                `Command "${command}" sent successfully.`
-            );
-
-            await loadDeviceStatus(
-                selectedDevice
+                "Automatic mode enabled."
             );
         }
         catch (err)
@@ -209,14 +200,57 @@ export default function CloudDeviceControl()
             setError(
                 err instanceof Error
                     ? err.message
-                    : "Failed to send command."
+                    : "Failed to enable automatic mode."
             );
         }
         finally
         {
             setLoading(false);
         }
+
+        return;
     }
+
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    try
+    {
+        const sent =
+            await cloudService.sendCommand(
+                selectedDevice,
+                command
+            );
+
+        if (!sent)
+        {
+            throw new Error(
+                "Command could not be delivered."
+            );
+        }
+
+        setSuccess(
+            `Command "${command}" sent successfully.`
+        );
+
+        await loadDeviceStatus(
+            selectedDevice
+        );
+    }
+    catch (err)
+    {
+        setError(
+            err instanceof Error
+                ? err.message
+                : "Failed to send command."
+        );
+    }
+    finally
+    {
+        setLoading(false);
+    }
+}
 
     //--------------------------------------------------
     // Logout
@@ -307,11 +341,11 @@ export default function CloudDeviceControl()
                         <CardHeader>
 
                             <CardTitle>
-                                My Devices
+                                My HonorPoles
                             </CardTitle>
 
                             <CardDescription>
-                                Select a device to control
+                                Select an HonorPole to view and control
                             </CardDescription>
 
                         </CardHeader>
@@ -333,8 +367,8 @@ export default function CloudDeviceControl()
                                         <button
                                             key={device.deviceId}
                                             onClick={() =>
-                                                setSelectedDevice(device.deviceId)
-                                            }
+                                selectDevice(device)
+                            } 
                                             className={`w-full p-3 rounded-lg border text-left transition-colors ${
                                                 selectedDevice === device.deviceId
                                                     ? "bg-blue-50 border-blue-500"
@@ -347,6 +381,12 @@ export default function CloudDeviceControl()
                                                 <span className="font-medium">
                                                     {device.deviceName}
                                                 </span>
+
+						<div className="mt-1 text-xs text-gray-500">
+						    {device.city || device.state || 						device.zipCode
+						        ? `${device.city || ""}${device.city && device.state ? ", " : ""}${device.state || ""}${device.zipCode ? 						` ${device.zipCode}` : ""}`
+						        : "Location not set"}
+						</div>
 
                                                 <Badge
                                                     className={
@@ -396,7 +436,7 @@ export default function CloudDeviceControl()
                         <CardHeader>
 
                             <CardTitle>
-                                Device Control
+                                HonorPole Control
                             </CardTitle>
 
                             <CardDescription>
@@ -717,6 +757,7 @@ export default function CloudDeviceControl()
     );
 
 }
+
 
 
 

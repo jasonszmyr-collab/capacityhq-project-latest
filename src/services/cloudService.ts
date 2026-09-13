@@ -124,6 +124,15 @@ export interface DeviceInfo
     lastSeen: string;
 
     signalStrength?: number;
+
+    city?: string;
+    state?: string;
+    zipCode?: string;
+    county?: string;
+    timezone?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    country?: string;
 }
 
 //======================================================================
@@ -339,8 +348,20 @@ private startTelemetryPolling(): void
                 // Cloud telemetry fallback
                 //--------------------------------------------------
 
-                const telemetry =
-                    await this.getDeviceStatus("HP-001");
+                const deviceId =
+    this.currentDeviceId;
+
+if (!deviceId)
+{
+    this.connected = false;
+    this.connectionMode = "offline";
+
+    this.notifyConnectionSubscribers(false);
+    return;
+}
+
+const telemetry =
+    await this.getDeviceStatus(deviceId);
 
                 this.updateTelemetry(telemetry);
 
@@ -424,10 +445,7 @@ private stopTelemetryPolling(): void
 
     constructor()
     {
-        this.authToken =
-            localStorage.getItem(
-                "cloud_auth_token"
-            );
+        this.authToken = null;
 
         this.refreshToken =
             localStorage.getItem(
@@ -435,16 +453,21 @@ private stopTelemetryPolling(): void
             );
 
         this.userId =
-            localStorage.getItem(
-                "cloud_user_id"
-            );
+    localStorage.getItem(
+        "cloud_user_id"
+    );
 
-        console.log("===================================");
-        console.log(" HonorPole Cloud Service v5.0.0");
-        console.log("===================================");
-        console.log("Cloud:", CLOUD_API);
-        console.log("WebSocket:", WS_ENDPOINT);
-        console.log("Ready.");
+this.currentDeviceId =
+    localStorage.getItem(
+        "honorpole_selected_device_id"
+    );
+
+console.log("===================================");
+console.log(" HonorPole Cloud Service v5.0.0");
+console.log("===================================");
+console.log("Cloud:", CLOUD_API);
+console.log("WebSocket:", WS_ENDPOINT);
+console.log("Ready.");
     }
     
         //======================================================
@@ -613,22 +636,27 @@ private stopTelemetryPolling(): void
         }
     }
 
-        //======================================================
+    //======================================================
     // Device Management
     //======================================================
 
     public setDevice(
-        device: DeviceInfo
-    ): void
-    {
-        this.currentDevice = device;
-        this.currentDeviceId = device.deviceId;
+    device: DeviceInfo
+): void
+{
+    this.currentDevice = device;
+    this.currentDeviceId = device.deviceId;
 
-        this.devices.set(
-            device.deviceId,
-            device
-        );
-    }
+    this.devices.set(
+        device.deviceId,
+        device
+    );
+
+    localStorage.setItem(
+        "honorpole_selected_device_id",
+        device.deviceId
+    );
+}
 
     //------------------------------------------------------
 
@@ -1869,16 +1897,33 @@ this.notifyTelemetrySubscribers();
             switch (message.type)
             {
                 case "telemetry":
+{
+    const messageDeviceId =
+        typeof message.deviceId === "string"
+            ? message.deviceId
+            : typeof message.data?.deviceId === "string"
+                ? message.data.deviceId
+                : null;
 
-                    this.telemetry =
-                    {
-                        ...this.telemetry,
-                        ...message.data
-                    };
+    if (
+        this.currentDeviceId &&
+        messageDeviceId &&
+        messageDeviceId !== this.currentDeviceId
+    )
+    {
+        break;
+    }
 
-                    this.notifyTelemetrySubscribers();
+    this.telemetry =
+    {
+        ...this.telemetry,
+        ...message.data
+    };
 
-                    break;
+    this.notifyTelemetrySubscribers();
+
+    break;
+}
 
                 case "event":
 

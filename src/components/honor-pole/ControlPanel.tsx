@@ -190,7 +190,9 @@ export default function ControlPanel({
     command: DeviceTarget | "STOP"
   ) => {
     const deviceId =
-      flagData?.device_id || "HP-001";
+  flagData?.device_id ??
+  cloudService.getCurrentDeviceId() ??
+  "HP-001";
 
     const cloudCommand =
       command.toLowerCase() as

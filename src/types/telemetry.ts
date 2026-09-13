@@ -174,7 +174,7 @@ export const DefaultTelemetry: DeviceTelemetry =
 
     hardware: "ESP32-S3",
 
-    serialNumber: "HP-001",
+    serialNumber: "--",
 
     deviceName: "HonorPole",
 

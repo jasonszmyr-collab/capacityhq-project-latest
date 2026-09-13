@@ -21,6 +21,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { format } from "date-fns";
+import { cloudService } from "../../services/cloudService";
 
 interface FlagData {
   id?: string | null;
@@ -144,8 +145,9 @@ export default function DeviceInfo({
             </span>
 
             <span className="text-sm font-mono font-medium text-zinc-800">
-              {flagData?.device_id ||
-                "HP-001"}
+              {flagData?.device_id ??
+              cloudService.getCurrentDeviceId() ??
+              "HP-001"}
             </span>
           </div>
 

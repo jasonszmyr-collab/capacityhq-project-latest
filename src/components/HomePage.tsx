@@ -26,7 +26,7 @@ import { Link } from "react-router-dom";
 import AppHeader from "./AppHeader";
 import BottomNav from "./BottomNav";
 
-import cloudService from "../services/cloudService";
+import cloudService, { type DeviceInfo } from "../services/cloudService";
 
 import {
     getHonorPoleMode,
@@ -46,7 +46,13 @@ import { DefaultTelemetry } from "../types/telemetry";
 // Configuration
 //======================================================================
 
-const DEVICE_ID = "HP-001";
+function getActiveDeviceId(): string
+{
+    return (
+        cloudService.getCurrentDeviceId()
+        ?? "HP-001"
+    );
+}
 
 //======================================================================
 // Helpers
@@ -73,6 +79,39 @@ function StatusRow({
 
         </div>
     );
+}
+
+//----------------------------------------------------------------------
+
+function formatUptime(totalSeconds: number): string
+{
+    if (!Number.isFinite(totalSeconds) || totalSeconds < 0)
+    {
+        return "Waiting for telemetry";
+    }
+
+    const seconds = Math.floor(totalSeconds);
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainingSeconds = seconds % 60;
+
+    if (days > 0)
+    {
+        return `${days} day ${hours} hr ${minutes} min`;
+    }
+
+    if (hours > 0)
+    {
+        return `${hours} hr ${minutes} min`;
+    }
+
+    if (minutes > 0)
+    {
+        return `${minutes} min ${remainingSeconds} sec`;
+    }
+
+    return `${remainingSeconds} sec`;
 }
 
 //----------------------------------------------------------------------
@@ -431,6 +470,14 @@ function LiveFlagVisualization({
 
 const HomePage = () =>
 {
+        const [availableDevices, setAvailableDevices] =
+        useState<DeviceInfo[]>([]);
+
+    const [selectedDeviceId, setSelectedDeviceId] =
+        useState<string>(
+            getActiveDeviceId()
+        );
+
     const [device, setDevice] =
         useState<DeviceTelemetry>(
             structuredClone(
@@ -557,6 +604,114 @@ const HomePage = () =>
                     );
                 }
             );
+        //------------------------------------------------------------------
+        // Select active HonorPole, then connect
+        //------------------------------------------------------------------
+
+        void (async () =>
+        {
+            try
+    {  
+                        let authAttempts = 0;
+
+        while (
+            !cloudService.getAuthToken() &&
+            authAttempts < 20
+        )
+        {
+            await new Promise<void>(
+                resolve =>
+                    window.setTimeout(
+                        resolve,
+                        250
+                    )
+            );
+
+            authAttempts++;
+
+            if (!mounted)
+            {
+                return;
+            }
+        }
+
+        if (!cloudService.getAuthToken())
+        {
+            console.warn(
+                "[HomePage] Authentication unavailable. Device list not loaded."
+            );
+
+            return;
+        }
+        
+                const devices =
+            await cloudService.getDevices();
+
+        if (!mounted)
+        {
+            return;
+        }
+
+        console.log(
+    "[HomePage] Real devices loaded:",
+    devices
+);
+        setAvailableDevices(devices);
+
+if (devices.length > 0)
+{
+    const currentDeviceId =
+        cloudService.getCurrentDeviceId();
+
+    const activeDevice =
+        devices.find(
+            device =>
+                device.deviceId === currentDeviceId
+        ) ?? devices[0];
+
+    cloudService.setDevice(activeDevice);
+
+    setSelectedDeviceId(
+        activeDevice.deviceId
+    );
+}
+
+        if (!mounted)
+        {
+            return;
+        }
+
+        const connected =
+            await cloudService.connect();
+
+        if (!mounted)
+        {
+            return;
+        }
+
+        setConnectionStatus(
+            connected
+                ? "Connected"
+                : "Disconnected"
+        );
+            }
+            catch (error)
+            {
+                console.error(
+                    "[HomePage] Startup connection failed",
+                    error
+                );
+
+                if (mounted)
+                {
+                    setConnectionStatus(
+                        "Disconnected"
+            );
+
+            setLoading(false);
+        }
+    }
+})();
 
         //------------------------------------------------------------------
         // Start cloud/local connection
@@ -626,7 +781,9 @@ const HomePage = () =>
             try
             {
                 const status =
-                    await getHonorPoleDirectiveStatus();
+                    await getHonorPoleDirectiveStatus(
+                    getActiveDeviceId()
+                );
 
                 if (!mounted)
                 {
@@ -676,7 +833,7 @@ const HomePage = () =>
                 setModeError(null);
 
                 const state =
-                    await getHonorPoleMode();
+                    await getHonorPoleMode(getActiveDeviceId());
 
                 if (!mounted)
                 {
@@ -805,6 +962,7 @@ const HomePage = () =>
 
             const state =
                 await setHonorPoleMode(
+                    getActiveDeviceId(),
                     "AUTO"
                 );
 
@@ -897,6 +1055,7 @@ const HomePage = () =>
 
             const state =
                 await setHonorPoleMode(
+                    getActiveDeviceId(),
                     persistentMode
                 );
 
@@ -917,12 +1076,12 @@ const HomePage = () =>
             );
 
             console.log(
-                `[HomePage] Sending ${command.toUpperCase()} to ${DEVICE_ID}`
+                `[HomePage] Sending ${command.toUpperCase()} to ${getActiveDeviceId()}`
             );
 
             const success =
                 await cloudService.sendCommand(
-                    DEVICE_ID,
+                    getActiveDeviceId(),
                     command
                 );
 
@@ -989,7 +1148,7 @@ const HomePage = () =>
 
             const success =
                 await cloudService.sendCommand(
-                    DEVICE_ID,
+                    getActiveDeviceId(),
                     "stop"
                 );
 
@@ -1055,7 +1214,7 @@ const HomePage = () =>
                     </h2>
 
                     <p className="text-gray-400 mt-2">
-                        Device {DEVICE_ID}
+                        Device {getActiveDeviceId()}
                     </p>
 
                 </div>
@@ -1111,11 +1270,84 @@ const HomePage = () =>
                         py-8
                         space-y-6
                     "
-                >
+                >                        {/* ================================================== */}
+                    {/* HONORPOLE SELECTOR */}
+                    {/* ================================================== */}
 
-                    {/* ================================================== */}
-                    {/* DEVICE SUMMARY */}
-                    {/* ================================================== */}
+                    <div
+                        className="
+                            rounded-2xl
+                            border
+                            border-white/10
+                            bg-slate-900/70
+                            p-4
+                        "
+                    >
+                        <label
+                            htmlFor="honorpole-selector"
+                            className="
+                                block
+                                text-sm
+                                font-semibold
+                                text-gray-300
+                                mb-2
+                            "
+                        >
+                            Select HonorPole
+                        </label>
+
+                        <select
+                            id="honorpole-selector"
+                            value={selectedDeviceId}
+                            onChange={(event) =>
+                            {
+                                const selected =
+                                    availableDevices.find(
+                                        item =>
+                                            item.deviceId ===
+                                            event.target.value
+                                    );
+
+                                if (!selected)
+                                {
+                                    return;
+                                }
+
+                                cloudService.setDevice(selected);
+
+                                setSelectedDeviceId(
+                                    selected.deviceId
+                                );
+                            }}
+                            className="
+                                w-full
+                                rounded-xl
+                                border
+                                border-white/10
+                                bg-slate-950
+                                px-4
+                                py-3
+                                text-white
+                            "
+                        >
+                            {availableDevices.length === 0 && (
+                                <option value={selectedDeviceId}>
+                                    HonorPole — {selectedDeviceId}
+                                </option>
+                            )}
+
+                            {availableDevices.map(
+                                item => (
+                                    <option
+                                        key={item.deviceId}
+                                        value={item.deviceId}
+                                    >
+                                        {item.deviceName} — {item.deviceId}
+                                    </option>
+                                )
+                            )}
+                        </select>
+                    </div>
 
                     <InfoCard title="HonorPole Status">
 
@@ -1132,7 +1364,7 @@ const HomePage = () =>
 
                                 <StatusRow
                                     label="Device ID"
-                                    value={DEVICE_ID}
+                                    value={selectedDeviceId}
                                 />
 
                                 <StatusRow
@@ -1586,7 +1818,7 @@ const HomePage = () =>
                             >
                                 Processing{" "}
                                 {sendingCommand.toUpperCase()}{" "}
-                                for {DEVICE_ID}...
+                                for {getActiveDeviceId()}...
                             </div>
                         )}
 
@@ -1599,21 +1831,6 @@ const HomePage = () =>
 <InfoCard title="Device Health">
 
     <StatusRow
-        label="Battery Voltage"
-        value="Not monitored"
-    />
-
-    <StatusRow
-        label="Motor Current"
-        value="Not monitored"
-    />
-
-    <StatusRow
-        label="CPU Temperature"
-        value="Not monitored"
-    />
-
-    <StatusRow
         label="Free Memory"
         value={
             device.health?.freeMemory
@@ -1623,13 +1840,13 @@ const HomePage = () =>
     />
 
     <StatusRow
-        label="Uptime"
-        value={
-            device.health?.uptime
-                ? `${device.health.uptime} sec`
-                : "Waiting for telemetry"
-        }
-    />
+    label="Uptime"
+    value={
+        typeof device.health?.uptime === "number"
+            ? formatUptime(device.health.uptime)
+            : "Waiting for telemetry"
+    }
+/>
 
     <StatusRow
         label="Last Heartbeat"
@@ -1639,6 +1856,8 @@ const HomePage = () =>
     />
 
 </InfoCard>
+
+//----------------------------------------------------------------------
 
                     {/* ================================================== */}
                     {/* ADMINISTRATION */}
@@ -1698,5 +1917,6 @@ const HomePage = () =>
 };
 
 export default HomePage;
+
 
 

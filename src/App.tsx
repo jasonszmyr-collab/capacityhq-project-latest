@@ -92,8 +92,9 @@ function App() {
         return;
       }
 
-      if (data.session?.access_token) {
+      if (data.session?.access_token && data.session?.user?.id) {
   cloudService.setAuthToken(data.session.access_token);
+  cloudService.setUserId(data.session.user.id);
 } else {
   cloudService.clearAuthentication();
 }
@@ -107,8 +108,9 @@ function App() {
     const { data: authListener } = supabase.auth.onAuthStateChange(
       (event, session) => {
 
-        if (session?.access_token) {
+        if (session?.access_token && session?.user?.id) {
   cloudService.setAuthToken(session.access_token);
+  cloudService.setUserId(session.user.id);
 } else {
   cloudService.clearAuthentication();
 }
