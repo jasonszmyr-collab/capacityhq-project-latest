@@ -1,4 +1,4 @@
-﻿/******************************************************************************
+/******************************************************************************
  *
  * HonorPole Mobile Application
  * File: cloudService.ts
@@ -9,14 +9,14 @@
  * DESCRIPTION
  * ---------------------------------------------------------------------------
  * Cloud / Local communications layer
- *  â€¢ Authentication
- *  â€¢ Device Discovery
- *  â€¢ Cloud API
- *  â€¢ Local ESP32 API
- *  â€¢ WebSocket Telemetry
- *  â€¢ Offline Queue
- *  â€¢ OTA
- *  â€¢ Legacy Compatibility Layer
+ *  Ã¢â‚¬Â¢ Authentication
+ *  Ã¢â‚¬Â¢ Device Discovery
+ *  Ã¢â‚¬Â¢ Cloud API
+ *  Ã¢â‚¬Â¢ Local ESP32 API
+ *  Ã¢â‚¬Â¢ WebSocket Telemetry
+ *  Ã¢â‚¬Â¢ Offline Queue
+ *  Ã¢â‚¬Â¢ OTA
+ *  Ã¢â‚¬Â¢ Legacy Compatibility Layer
  *
  ******************************************************************************/
 
@@ -2020,6 +2020,132 @@ this.notifyTelemetrySubscribers();
     // Local REST API
     //======================================================
 
+    public async resetDeviceWiFi(): Promise<void>
+    {
+        if (!this.currentDeviceId)
+        {
+            throw new Error("No HonorPole selected.");
+        }
+
+        let deviceIP = this.localIP;
+
+        if (!deviceIP)
+        {
+            const saved = await Preferences.get({
+                key: this.getLocalIpPreferenceKey(
+                    this.currentDeviceId
+                )
+            });
+
+            deviceIP =
+                saved.value?.replace(
+                    /^https?:\/\//,
+                    ""
+                ) ?? null;
+        }
+
+        if (!deviceIP)
+        {
+            try
+            {
+                const status =
+                    await this.getDeviceStatus(
+                        this.currentDeviceId
+                    );
+
+                const statusIP =
+                    status.network?.ipAddress;
+
+                if (
+                    statusIP &&
+                    statusIP !== "--"
+                )
+                {
+                    deviceIP =
+                        statusIP.replace(
+                            /^https?:\/\//,
+                            ""
+                        );
+                }
+            }
+            catch (error)
+            {
+                console.warn(
+                    "[WiFi Reset] Cloud IP lookup failed.",
+                    error
+                );
+            }
+        }
+
+        if (!deviceIP)
+        {
+            try
+            {
+                const discovered =
+                    await discovery.discover();
+
+                if (discovered?.ip)
+                {
+                    deviceIP =
+                        discovered.ip.replace(
+                            /^https?:\/\//,
+                            ""
+                        );
+                }
+            }
+            catch (error)
+            {
+                console.warn(
+                    "[WiFi Reset] Local discovery failed.",
+                    error
+                );
+            }
+        }
+
+        if (!deviceIP)
+        {
+            throw new Error(
+                "HonorPole could not be found on the local WiFi network."
+            );
+        }
+
+        const response =
+            await CapacitorHttp.request({
+                method: "POST",
+                url: `http://${deviceIP}/resetwifi`,
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                connectTimeout: 3000,
+                readTimeout: 3000
+            });
+
+        if (
+            response.status < 200 ||
+            response.status >= 300
+        )
+        {
+            throw new Error(
+                `HonorPole rejected the WiFi reset (${response.status}).`
+            );
+        }
+
+        await Preferences.remove({
+            key: this.getLocalIpPreferenceKey(
+                this.currentDeviceId
+            )
+        });
+
+        this.localConnected = false;
+        this.localIP = null;
+
+        this.connectionMode =
+            this.connected
+                ? "cloud"
+                : "offline";
+    }
+
+    //------------------------------------------------------
     private async localRequest<T>(
         endpoint: string,
         options: RequestInit = {}

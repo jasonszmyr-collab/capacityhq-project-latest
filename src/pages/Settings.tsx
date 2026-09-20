@@ -4,9 +4,14 @@ import { useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import BottomNav from "../components/BottomNav";
 import { supabase } from "../services/supabaseClient";
+import { cloudService } from "../services/cloudService";
 
 export default function Settings() {
   const navigate = useNavigate();
+
+  const [resettingWiFi, setResettingWiFi] = useState(false);
+  const [wifiResetComplete, setWiFiResetComplete] = useState(false);
+  const [wifiError, setWiFiError] = useState<string | null>(null);
 
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -17,6 +22,45 @@ export default function Settings() {
       "_blank",
       "noopener,noreferrer"
     );
+  };
+
+  const handleResetWiFi = async () => {
+    const confirmed = window.confirm(
+      "Reset WiFi on the selected HonorPole?\n\n" +
+        "The device will forget its current WiFi network and restart in setup mode."
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    const finalConfirmation = window.confirm(
+      "Are you sure?\n\n" +
+        "You will need to connect your phone to HonorPole-Setup and complete WiFi setup again."
+    );
+
+    if (!finalConfirmation) {
+      return;
+    }
+
+    setResettingWiFi(true);
+    setWiFiResetComplete(false);
+    setWiFiError(null);
+
+    try {
+      await cloudService.resetDeviceWiFi();
+      setWiFiResetComplete(true);
+    } catch (err) {
+      console.error("HonorPole WiFi reset failed:", err);
+
+      setWiFiError(
+        err instanceof Error
+          ? err.message
+          : "Unable to reset HonorPole WiFi."
+      );
+    } finally {
+      setResettingWiFi(false);
+    }
   };
 
   const handleDeleteAccount = async () => {
@@ -97,6 +141,56 @@ export default function Settings() {
           >
             Privacy Policy
           </button>
+        </section>
+
+        <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-5 mb-4">
+          <h2 className="text-lg font-semibold mb-2">
+            HonorPole WiFi
+          </h2>
+
+          <p className="text-sm text-white/70 mb-4">
+            Use this only when moving the selected HonorPole to a different
+            WiFi network. The device will forget its saved network and restart
+            in setup mode.
+          </p>
+
+          {wifiError && (
+            <p className="text-sm text-red-400 mb-4">
+              {wifiError}
+            </p>
+          )}
+
+          {wifiResetComplete && (
+            <div className="rounded-lg border border-green-500/40 bg-green-500/10 p-4 mb-4">
+              <p className="text-sm text-green-300">
+                WiFi was cleared successfully. Connect this phone to
+                HonorPole-Setup, then continue setup.
+              </p>
+
+              <button
+                type="button"
+                onClick={() => navigate("/setup")}
+                className="mt-4 w-full rounded-lg bg-green-600 px-4 py-3 font-semibold"
+              >
+                Continue WiFi Setup
+              </button>
+            </div>
+          )}
+
+          {!wifiResetComplete && (
+            <button
+              type="button"
+              disabled={resettingWiFi}
+              onClick={() => {
+                void handleResetWiFi();
+              }}
+              className="w-full rounded-lg border border-amber-500/50 px-4 py-3 text-amber-300 disabled:opacity-50"
+            >
+              {resettingWiFi
+                ? "Resetting HonorPole WiFi..."
+                : "Reset HonorPole WiFi"}
+            </button>
+          )}
         </section>
 
         <section className="rounded-xl border border-red-500/30 bg-red-500/5 p-5">

@@ -1670,7 +1670,7 @@ const state = getDeviceState(deviceId);
           false,
 
         ssid:
-          "",
+          state.ssid || "",
 
         ipAddress:
           state.ip || "",
