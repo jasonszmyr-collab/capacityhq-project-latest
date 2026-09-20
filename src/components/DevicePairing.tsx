@@ -38,14 +38,14 @@ export default function DevicePairing({ onPairingSuccess }: DevicePairingProps) 
   };
 
   return (
-    <Card className="w-full max-w-md">
+    <Card className="w-full max-w-md max-h-[calc(100dvh-12rem)] overflow-y-auto overscroll-contain border-slate-700 bg-slate-900 text-slate-100 shadow-xl">
       <CardHeader>
-        <CardTitle>Pair Your Device</CardTitle>
-        <CardDescription>
+        <CardTitle className="text-slate-50">Pair Your Device</CardTitle>
+        <CardDescription className="text-slate-300">
           Enter the pairing code displayed on your HonorPole device
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="pb-8">
         {error && (
           <Alert className="mb-4 bg-red-50 border-red-200">
             <AlertDescription className="text-red-800">{error}</AlertDescription>
@@ -60,7 +60,7 @@ export default function DevicePairing({ onPairingSuccess }: DevicePairingProps) 
 
         <form onSubmit={handlePairing} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="pairingCode">Pairing Code</Label>
+            <Label htmlFor="pairingCode" className="text-slate-100">Pairing Code</Label>
             <Input
               id="pairingCode"
               value={pairingCode}
@@ -68,33 +68,40 @@ export default function DevicePairing({ onPairingSuccess }: DevicePairingProps) 
               placeholder="XXXX-XXXX"
               required
               maxLength={9}
+              className="border-slate-600 bg-slate-950 text-slate-50 placeholder:text-slate-500 focus-visible:ring-blue-500"
             />
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-slate-400">
               Find this code on your device's display or setup screen
             </p>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="deviceName">Device Name</Label>
+            <Label htmlFor="deviceName" className="text-slate-100">Device Name</Label>
             <Input
               id="deviceName"
               value={deviceName}
               onChange={(e) => setDeviceName(e.target.value)}
               placeholder="Front Yard Flag Pole"
               required
+              maxLength={80}
+              className="border-slate-600 bg-slate-950 text-slate-50 placeholder:text-slate-500 focus-visible:ring-blue-500"
             />
           </div>
 
-          <Button type="submit" className="w-full" disabled={loading}>
+          <Button
+            type="submit"
+            className="w-full bg-blue-600 text-white hover:bg-blue-500 disabled:text-slate-300"
+            disabled={loading}
+          >
             {loading ? 'Pairing...' : 'Pair Device'}
           </Button>
         </form>
 
-        <div className="mt-6 p-4 bg-blue-50 rounded-lg">
-          <h3 className="text-sm font-semibold text-blue-900 mb-2">
+        <div className="mt-6 rounded-lg border border-blue-800 bg-blue-950/70 p-4">
+          <h3 className="mb-2 text-sm font-semibold text-blue-200">
             How to get your pairing code:
           </h3>
-          <ol className="text-sm text-blue-800 space-y-1 list-decimal list-inside">
+          <ol className="list-inside list-decimal space-y-1 text-sm text-blue-100">
             <li>Connect your device to WiFi using the WiFi setup</li>
             <li>The device will display a pairing code</li>
             <li>Enter the code above to link the device to your account</li>

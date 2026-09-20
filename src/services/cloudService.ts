@@ -1,4 +1,4 @@
-/******************************************************************************
+﻿/******************************************************************************
  *
  * HonorPole Mobile Application
  * File: cloudService.ts
@@ -9,14 +9,14 @@
  * DESCRIPTION
  * ---------------------------------------------------------------------------
  * Cloud / Local communications layer
- *  • Authentication
- *  • Device Discovery
- *  • Cloud API
- *  • Local ESP32 API
- *  • WebSocket Telemetry
- *  • Offline Queue
- *  • OTA
- *  • Legacy Compatibility Layer
+ *  â€¢ Authentication
+ *  â€¢ Device Discovery
+ *  â€¢ Cloud API
+ *  â€¢ Local ESP32 API
+ *  â€¢ WebSocket Telemetry
+ *  â€¢ Offline Queue
+ *  â€¢ OTA
+ *  â€¢ Legacy Compatibility Layer
  *
  ******************************************************************************/
 
@@ -640,10 +640,22 @@ console.log("Ready.");
     // Device Management
     //======================================================
 
+    private getLocalIpPreferenceKey(
+        deviceId: string
+    ): string
+    {
+        return `honorpole_last_ip_${deviceId}`;
+    }
+
+    //------------------------------------------------------
+
     public setDevice(
     device: DeviceInfo
 ): void
 {
+    const deviceChanged =
+        this.currentDeviceId !== device.deviceId;
+
     this.currentDevice = device;
     this.currentDeviceId = device.deviceId;
 
@@ -656,6 +668,37 @@ console.log("Ready.");
         "honorpole_selected_device_id",
         device.deviceId
     );
+
+    if (deviceChanged)
+    {
+        // A LAN address belongs to one physical pole only. Never carry
+        // the previous pole's local connection across a selection change.
+        this.localConnected = false;
+        this.localIP = null;
+
+        this.telemetry =
+        {
+            ...structuredClone(DefaultTelemetry),
+            deviceName: device.deviceName,
+            firmware: device.firmware,
+            serialNumber: device.serialNumber
+        };
+
+        this.notifyTelemetrySubscribers();
+
+        if (
+            this.socket &&
+            this.socket.readyState === WebSocket.OPEN
+        )
+        {
+            this.socket.send(
+                JSON.stringify({
+                    type: "subscribe",
+                    deviceId: device.deviceId
+                })
+            );
+        }
+    }
 }
 
     //------------------------------------------------------
@@ -760,14 +803,7 @@ console.log("Ready.");
 
         if (typeof value1 !== "string")
         {
-            this.devices.set(
-                value1.deviceId,
-                value1
-            );
-
-            this.currentDevice = value1;
-            this.currentDeviceId =
-                value1.deviceId;
+            this.setDevice(value1);
 
             return;
         }
@@ -789,14 +825,7 @@ console.log("Ready.");
                 }
             );
 
-        this.devices.set(
-            device.deviceId,
-            device
-        );
-
-        this.currentDevice = device;
-        this.currentDeviceId =
-            device.deviceId;
+        this.setDevice(device);
 
         return device;
     }
@@ -917,6 +946,16 @@ console.log("Ready.");
         this.localIP = ip;
         this.connectionMode = "local";
 
+        if (this.currentDeviceId)
+        {
+            void Preferences.set({
+                key: this.getLocalIpPreferenceKey(
+                    this.currentDeviceId
+                ),
+                value: ip
+            });
+        }
+
         console.log(
             `[Cloud] Local Device ${ip}`
         );
@@ -998,11 +1037,14 @@ console.log("Ready.");
 
         if (
             command === "stop" &&
+            deviceId === this.currentDeviceId &&
             (!this.localConnected || !this.localIP)
         )
         {
             const saved = await Preferences.get({
-                key: "honorpole_last_ip"
+                key: this.getLocalIpPreferenceKey(
+                    deviceId
+                )
             });
 
             if (saved.value)
@@ -1023,40 +1065,53 @@ console.log("Ready.");
         //--------------------------------------------------
 
         if (
+            deviceId === this.currentDeviceId &&
             this.localConnected &&
             this.localIP
         )
         {
-            try
+            if (command === "stop")
             {
-                const ok =
-                    await this.sendLocalCommand(
-                        command
-                    );
+                // Emergency STOP must not wait for a stale or unreachable
+                // LAN address before the cloud request is sent.
+                void this.sendLocalCommand(command)
+                    .then(ok =>
+                    {
+                        if (ok)
+                        {
+                            console.log(
+                                "[STOP] Local STOP delivered."
+                            );
+                        }
+                    });
 
-                if (ok)
+                console.log(
+                    "[STOP] Local and cloud STOP dispatched in parallel."
+                );
+            }
+            else
+            {
+                try
                 {
-                    // Emergency STOP also continues to cloud
-                    // so the server receives STOP as a backup.
-                    if (command !== "stop")
+                    const ok =
+                        await this.sendLocalCommand(
+                            command
+                        );
+
+                    if (ok)
                     {
                         return true;
                     }
-
-                    console.log(
-                        "[STOP] Local STOP sent; sending cloud backup."
+                }
+                catch (error)
+                {
+                    console.warn(
+                        "[Cloud] Local command failed.",
+                        error
                     );
                 }
             }
-            catch (error)
-            {
-                console.warn(
-                    "[Cloud] Local command failed.",
-                    error
-                );
-            }
         }
-
         //--------------------------------------------------
         // Cloud Fallback
         //--------------------------------------------------
@@ -1209,11 +1264,7 @@ console.log("Ready.");
                 return false;
             }
 
-            this.localIP = found.ip;
-
-            this.localConnected = true;
-
-            this.connectionMode = "local";
+            this.setLocalConnection(found.ip);
 
             this.telemetry.network.ipAddress =
                 found.ip;
@@ -1702,8 +1753,13 @@ this.notifyTelemetrySubscribers();
 
         try
         {
+            const deviceQuery =
+                this.currentDeviceId
+                    ? `&deviceId=${encodeURIComponent(this.currentDeviceId)}`
+                    : "";
+
             const url =
-                `${WS_ENDPOINT}?token=${encodeURIComponent(this.authToken)}`;
+                `${WS_ENDPOINT}?token=${encodeURIComponent(this.authToken)}${deviceQuery}`;
 
             console.log(
                 "[Cloud] Opening authenticated WebSocket"
@@ -2448,7 +2504,6 @@ this.notifyTelemetrySubscribers();
     new CloudService();
 
 export default cloudService;   
-
 
 
 

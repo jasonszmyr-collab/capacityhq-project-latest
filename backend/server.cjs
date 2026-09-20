@@ -12,6 +12,20 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const DEVICE_ID = "HP-001";
 
+const DEVICE_PAIRING_SECRETS = (() => {
+  try {
+    return JSON.parse(
+      process.env.DEVICE_PAIRING_SECRETS || "{}"
+    );
+  } catch (error) {
+    console.error(
+      "Invalid DEVICE_PAIRING_SECRETS configuration"
+    );
+
+    return {};
+  }
+})();
+
 const AUTO_CONTROL_SECRET =
   process.env.AUTO_CONTROL_SECRET || "";
 
@@ -54,6 +68,57 @@ function hashPairingCode(pairingCode) {
     .createHash("sha256")
     .update(String(pairingCode).trim().toUpperCase())
     .digest("hex");
+}
+
+function requireDevicePairingAuth(req, res, next) {
+  const deviceId =
+    typeof req.body?.deviceId === "string"
+      ? req.body.deviceId.trim()
+      : "";
+
+  const providedSecret =
+    typeof req.headers["x-device-secret"] === "string"
+      ? req.headers["x-device-secret"].trim()
+      : "";
+
+  if (!deviceId || !providedSecret) {
+    return res.status(401).json({
+      success: false,
+      error: "Device authentication required"
+    });
+  }
+
+  const expectedSecret =
+    DEVICE_PAIRING_SECRETS[deviceId];
+
+  if (!expectedSecret) {
+    return res.status(401).json({
+      success: false,
+      error: "Unknown device"
+    });
+  }
+
+  const providedBuffer =
+    Buffer.from(providedSecret);
+
+  const expectedBuffer =
+    Buffer.from(expectedSecret);
+
+  if (
+    providedBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(
+      providedBuffer,
+      expectedBuffer
+    )
+  ) {
+    return res.status(401).json({
+      success: false,
+      error: "Invalid device credentials"
+    });
+  }
+
+  req.deviceId = deviceId;
+  next();
 }
 
 async function requireSupabaseAuth(req, res, next) {
@@ -1021,6 +1086,115 @@ command: {
 }
 });
 });
+
+// =========================================================
+// DEVICE PAIRING CODE REGISTRATION
+// Called by the physical HonorPole after it has Internet.
+// Requires per-device authentication.
+// =========================================================
+
+app.post(
+  "/api/device/pairing-code",
+  requireDevicePairingAuth,
+  async (req, res) => {
+    if (!SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(503).json({
+        success: false,
+        error: "Device pairing is unavailable"
+      });
+    }
+
+    const pairingCode =
+      typeof req.body?.pairingCode === "string"
+        ? req.body.pairingCode.trim().toUpperCase()
+        : "";
+
+    if (!pairingCode) {
+      return res.status(400).json({
+        success: false,
+        error: "Pairing code is required"
+      });
+    }
+
+    if (!/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/.test(pairingCode)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid pairing code format"
+      });
+    }
+
+    const pairingCodeHash =
+      hashPairingCode(pairingCode);
+
+    const expiresAt =
+      new Date(
+        Date.now() + 60 * 60 * 1000
+      ).toISOString();
+
+    try {
+      const response = await fetch(
+        `${SUPABASE_URL}/rest/v1/devices` +
+          `?device_id=eq.${encodeURIComponent(req.deviceId)}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization:
+              `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+            apikey:
+              SUPABASE_SERVICE_ROLE_KEY,
+            "Content-Type":
+              "application/json",
+            Prefer:
+              "return=representation"
+          },
+          body: JSON.stringify({
+            pairing_code_hash:
+              pairingCodeHash,
+            pairing_code_expires_at:
+              expiresAt,
+            pairing_claimed_at:
+              null
+          })
+        }
+      );
+
+      const body = await response.text();
+
+      if (!response.ok) {
+        console.error(
+          "Pairing code registration failed:",
+          response.status,
+          body
+        );
+
+        return res.status(502).json({
+          success: false,
+          error:
+            "Unable to register pairing code"
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        deviceId: req.deviceId,
+        expiresAt
+      });
+    } catch (error) {
+      console.error(
+        "Pairing code registration error:",
+        error instanceof Error
+          ? error.message
+          : "Unknown error"
+      );
+
+      return res.status(500).json({
+        success: false,
+        error:
+          "Pairing code registration failed"
+      });
+    }
+  }
+);
 
 // =========================================================
 // DEVICE PAIRING / CLAIM

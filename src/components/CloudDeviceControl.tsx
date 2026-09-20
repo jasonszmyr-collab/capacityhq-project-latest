@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-
+﻿import { useEffect, useState } from "react";
+import DevicePairing from "./DevicePairing";
 import { Button } from "./ui/button";
 import {
     Card,
@@ -10,283 +10,309 @@ import {
 } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Alert, AlertDescription } from "./ui/alert";
-
-
 import {
     cloudService,
     type DeviceInfo,
     type CommandType
 } from "../services/cloudService";
-
 import type { DeviceTelemetry } from "../types/telemetry";
-import { setHonorPoleMode } from "../services/honorPoleModeService";
-
+import {
+    getHonorPoleMode,
+    setHonorPoleMode,
+    type HonorPoleOverrideMode
+} from "../services/honorPoleModeService";
 
 export default function CloudDeviceControl()
 {
-    //--------------------------------------------------
-    // State
-    //--------------------------------------------------
+    const [devices, setDevices] = useState<DeviceInfo[]>([]);
+    const [selectedDevice, setSelectedDevice] = useState<string | null>(
+        cloudService.getCurrentDeviceId()
+    );
+    const [telemetry, setTelemetry] = useState<DeviceTelemetry | null>(null);
+    const [operatingMode, setOperatingMode] =
+        useState<HonorPoleOverrideMode | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [switching, setSwitching] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [success, setSuccess] = useState<string | null>(null);
+    const [showPairing, setShowPairing] = useState(false);
 
-    const [devices, setDevices] =
-        useState<DeviceInfo[]>([]);
-
-    const [selectedDevice, setSelectedDevice] =
-        useState<string | null>(null);
-
-    const [telemetry, setTelemetry] =
-        useState<DeviceTelemetry | null>(null);
-
-    const [loading, setLoading] =
-        useState(false);
-
-    const [error, setError] =
-        useState<string | null>(null);
-
-    const [success, setSuccess] =
-        useState<string | null>(null);
-
-    //--------------------------------------------------
-    // Select Active HonorPole
-    //--------------------------------------------------
+    const selectedDeviceInfo =
+        devices.find(device => device.deviceId === selectedDevice) ?? null;
 
     function selectDevice(device: DeviceInfo)
     {
-        cloudService.setDevice(device);
-
-        setSelectedDevice(
-            device.deviceId
-        );
-
-        setTelemetry(null);
-    }
-
-    //--------------------------------------------------
-    // Initial Load
-    //--------------------------------------------------
-
-    useEffect(() =>
-    {
-        void loadDevices();
-    }, []);
-
-    //--------------------------------------------------
-    // Selected Device Changed
-    //--------------------------------------------------
-
-    useEffect(() =>
-    {
-
-        if (!selectedDevice)
+        if (device.deviceId === selectedDevice)
         {
             return;
         }
 
-        void loadDeviceStatus(selectedDevice);
+        setSwitching(true);
+        setTelemetry(null);
+        setOperatingMode(null);
+        setError(null);
+        setSuccess(null);
 
-        const pollInterval = window.setInterval(() =>
+        // This persisted selection is shared with the Home page.
+        cloudService.setDevice(device);
+        setSelectedDevice(device.deviceId);
+    }
+
+    useEffect(() =>
+    {
+        let mounted = true;
+
+        async function loadDevices()
         {
-            void loadDeviceStatus(selectedDevice);
+            try
+            {
+                const list = await cloudService.getDevices();
+
+                if (!mounted)
+                {
+                    return;
+                }
+
+                setDevices(list);
+
+                if (list.length === 0)
+                {
+                    setSelectedDevice(null);
+                    return;
+                }
+
+                const currentDeviceId = cloudService.getCurrentDeviceId();
+                const activeDevice =
+                    list.find(device => device.deviceId === currentDeviceId)
+                    ?? list[0];
+
+                cloudService.setDevice(activeDevice);
+                setSelectedDevice(activeDevice.deviceId);
+            }
+            catch (err)
+            {
+                if (mounted)
+                {
+                    setError(
+                        err instanceof Error
+                            ? err.message
+                            : "Unable to load HonorPoles."
+                    );
+                }
+            }
+        }
+
+        void loadDevices();
+
+        return () =>
+        {
+            mounted = false;
+        };
+    }, []);
+
+    useEffect(() =>
+    {
+        if (!selectedDevice)
+        {
+            setTelemetry(null);
+            setOperatingMode(null);
+            return;
+        }
+
+        let mounted = true;
+
+        const unsubscribeTelemetry =
+            cloudService.subscribeTelemetry(
+                (liveTelemetry: DeviceTelemetry) =>
+                {
+                    if (!mounted)
+                    {
+                        return;
+                    }
+
+                    setTelemetry(liveTelemetry);
+                    setSwitching(false);
+                    setError(null);
+                }
+            );
+
+        async function connectAndLoadMode(deviceId: string)
+        {
+            try
+            {
+                setSwitching(true);
+
+                await cloudService.connect();
+
+                if (!mounted)
+                {
+                    return;
+                }
+
+                const mode =
+                    await getHonorPoleMode(deviceId);
+
+                if (mounted)
+                {
+                    setOperatingMode(mode.override_mode);
+                    setSwitching(false);
+                }
+            }
+            catch (err)
+            {
+                if (mounted)
+                {
+                    setSwitching(false);
+                    setError(
+                        err instanceof Error
+                            ? err.message
+                            : "Unable to load the selected HonorPole."
+                    );
+                }
+            }
+        }
+
+        void connectAndLoadMode(selectedDevice);
+
+        const modeInterval = window.setInterval(() =>
+        {
+            void getHonorPoleMode(selectedDevice)
+                .then(mode =>
+                {
+                    if (mounted)
+                    {
+                        setOperatingMode(mode.override_mode);
+                    }
+                })
+                .catch(error =>
+                {
+                    console.error(
+                        "Unable to refresh HonorPole operating mode:",
+                        error
+                    );
+                });
         }, 5000);
 
         return () =>
         {
-            window.clearInterval(pollInterval);
+            mounted = false;
+            unsubscribeTelemetry();
+            window.clearInterval(modeInterval);
         };
-
     }, [selectedDevice]);
 
-    //--------------------------------------------------
-    // Load Device List
-    //--------------------------------------------------
-
-    async function loadDevices()
+    async function handleCommand(command: CommandType)
     {
-        try
+        if (!selectedDevice || switching)
         {
-            const list =
-                await cloudService.getDevices();
-
-            setDevices(list);
-
-            if (
-                list.length > 0 &&
-                !selectedDevice
-            )
-            {
-                const currentDeviceId =
-                    cloudService.getCurrentDeviceId();
-
-                const deviceToSelect =
-                    list.find(
-                        device =>
-                            device.deviceId ===
-                            currentDeviceId
-                    )
-                    ?? list[0];
-
-                selectDevice(deviceToSelect);
-            }
+            return;
         }
-        catch (err)
-        {
-            setError(
-                err instanceof Error
-                    ? err.message
-                    : "Unable to load devices."
-            );
-        }
-    }
 
-    //--------------------------------------------------
-    // Load Telemetry
-    //--------------------------------------------------
-
-    async function loadDeviceStatus(
-        deviceId: string
-    )
-    {
-        try
-        {
-            const status =
-                await cloudService.getDeviceStatus(
-                    deviceId
-                );
-
-            setTelemetry(status);
-        }
-        catch (err)
-        {
-            console.error(
-                "Failed to load telemetry:",
-                err
-            );
-        }
-    }
-
-    //--------------------------------------------------
-// Send Command
-//--------------------------------------------------
-
-async function handleCommand(
-    command: CommandType
-)
-{
-    if (!selectedDevice)
-    {
-        return;
-    }
-
-    // AUTO is an operating mode, never a physical motor command.
-    if (command === "auto")
-    {
         setLoading(true);
         setError(null);
         setSuccess(null);
 
         try
         {
-            await setHonorPoleMode(
+            if (command === "auto")
+            {
+                const mode = await setHonorPoleMode(selectedDevice, "AUTO");
+                setOperatingMode(mode.override_mode);
+                setSuccess(
+                    `Automatic mode enabled for ${selectedDeviceInfo?.deviceName ?? selectedDevice}.`
+                );
+                return;
+            }
+
+            if (command !== "stop")
+            {
+                const modeByCommand: Partial<
+                    Record<CommandType, HonorPoleOverrideMode>
+                > = {
+                    full: "FULL",
+                    half: "HALF",
+                    down: "DOWN"
+                };
+                const nextMode = modeByCommand[command];
+
+                if (nextMode)
+                {
+                    const mode = await setHonorPoleMode(
+                        selectedDevice,
+                        nextMode
+                    );
+                    setOperatingMode(mode.override_mode);
+                }
+            }
+
+            const deviceCommand: CommandType =
+                command === "down"
+                    ? "bottom"
+                    : command;
+
+            const sent = await cloudService.sendCommand(
                 selectedDevice,
-                "AUTO"
+                deviceCommand
             );
 
+            if (!sent)
+            {
+                throw new Error("Command could not be delivered.");
+            }
+
             setSuccess(
-                "Automatic mode enabled."
+                `${command.toUpperCase()} sent to ${selectedDeviceInfo?.deviceName ?? selectedDevice}.`
             );
+
         }
         catch (err)
         {
             setError(
                 err instanceof Error
                     ? err.message
-                    : "Failed to enable automatic mode."
+                    : "Failed to send command."
             );
         }
         finally
         {
             setLoading(false);
         }
-
-        return;
     }
-
-    setLoading(true);
-    setError(null);
-    setSuccess(null);
-
-    try
-    {
-        const sent =
-            await cloudService.sendCommand(
-                selectedDevice,
-                command
-            );
-
-        if (!sent)
-        {
-            throw new Error(
-                "Command could not be delivered."
-            );
-        }
-
-        setSuccess(
-            `Command "${command}" sent successfully.`
-        );
-
-        await loadDeviceStatus(
-            selectedDevice
-        );
-    }
-    catch (err)
-    {
-        setError(
-            err instanceof Error
-                ? err.message
-                : "Failed to send command."
-        );
-    }
-    finally
-    {
-        setLoading(false);
-    }
-}
-
-    //--------------------------------------------------
-    // Logout
-    //--------------------------------------------------
 
     function handleLogout()
     {
         cloudService.clearAuth();
-
         window.location.reload();
     }
-        //--------------------------------------------------
-    // Render
-    //--------------------------------------------------
+
+    const controlsDisabled =
+        loading || switching || !telemetry?.online;
+
+    const positionPercent =
+        telemetry && telemetry.learnedTopPosition > 0
+            ? Math.max(
+                0,
+                Math.min(
+                    100,
+                    Math.round(
+                        telemetry.currentPosition /
+                        telemetry.learnedTopPosition * 100
+                    )
+                )
+            )
+            : null;
 
     return (
-        <div className="min-h-screen bg-gray-50 p-6">
-
-            <div className="max-w-6xl mx-auto">
-
-                {/*==================================================*/}
-                {/* Header */}
-                {/*==================================================*/}
-
-                <div className="mb-8 flex justify-between items-center">
-
+        <div className="min-h-screen bg-gray-50 p-4 pb-28 sm:p-6 sm:pb-28">
+            <div className="max-w-4xl mx-auto space-y-6">
+                <div className="flex items-start justify-between gap-4">
                     <div>
-
-                        <h1 className="text-4xl font-bold text-gray-900 mb-2">
-                            Cloud Control
+                        <h1 className="text-3xl font-bold text-gray-900">
+                            HonorPole Control
                         </h1>
-
-                        <p className="text-gray-600">
-                            Control your HonorPole from anywhere.
+                        <p className="mt-1 text-gray-600">
+                            Select the pole you want to operate.
                         </p>
-
                     </div>
 
                     <Button
@@ -295,471 +321,285 @@ async function handleCommand(
                     >
                         Logout
                     </Button>
-
                 </div>
 
-                {/*==================================================*/}
-                {/* Messages */}
-                {/*==================================================*/}
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Select HonorPole</CardTitle>
+                        <CardDescription>
+                            This selection is shared with the Home page.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <select
+                            id="control-honorpole-selector"
+                            value={selectedDevice ?? ""}
+                            disabled={devices.length === 0 || switching}
+                            onChange={(event) =>
+                            {
+                                const device = devices.find(
+                                    item => item.deviceId === event.target.value
+                                );
+
+                                if (device)
+                                {
+                                    selectDevice(device);
+                                }
+                            }}
+                            className="w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-gray-900"
+                        >
+                            {devices.length === 0 && (
+                                <option value="">No HonorPoles found</option>
+                            )}
+
+                            {devices.map(device => (
+                                <option
+                                    key={device.deviceId}
+                                    value={device.deviceId}
+                                >
+                                    {device.deviceName} - {device.deviceId}
+                                </option>
+                            ))}
+                        </select>
+
+                        <Button
+                            type="button"
+                            onClick={() => setShowPairing(true)}
+                            className="mt-4 w-full"
+                        >
+                            Add HonorPole
+                        </Button>
+
+                        {showPairing && (
+                            <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                                <div className="mb-4 flex items-center justify-between gap-4">
+                                    <h3 className="text-lg font-semibold text-gray-900">
+                                        Add HonorPole
+                                    </h3>
+
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={() => setShowPairing(false)}
+                                    >
+                                        Cancel
+                                    </Button>
+                                </div>
+
+                                <DevicePairing
+                                    onPairingSuccess={(deviceId) =>
+                                    {
+                                        setSelectedDevice(deviceId);
+                                        setShowPairing(false);
+                                        window.location.reload();
+                                    }}
+                                />
+                            </div>
+                        )}
+
+                        {switching && (
+                            <p className="mt-3 text-sm text-blue-700">
+                                Loading the selected HonorPole...
+                            </p>
+                        )}
+                    </CardContent>
+                </Card>
 
                 {error && (
-
-                    <Alert className="mb-6 bg-red-50 border-red-200">
-
+                    <Alert className="bg-red-50 border-red-200">
                         <AlertDescription className="text-red-800">
                             {error}
                         </AlertDescription>
-
                     </Alert>
-
                 )}
 
                 {success && (
-
-                    <Alert className="mb-6 bg-green-50 border-green-200">
-
+                    <Alert className="bg-green-50 border-green-200">
                         <AlertDescription className="text-green-800">
                             {success}
                         </AlertDescription>
-
                     </Alert>
-
                 )}
 
-                {/*==================================================*/}
-                {/* Main Layout */}
-                {/*==================================================*/}
+                <Card>
+                    <CardHeader>
+                        <div className="flex items-start justify-between gap-4">
+                            <div>
+                                <CardTitle>
+                                    {selectedDeviceInfo?.deviceName ?? "No HonorPole selected"}
+                                </CardTitle>
+                                <CardDescription>
+                                    {selectedDevice ?? "Select an HonorPole to begin"}
+                                </CardDescription>
+                            </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-                    {/*==================================================*/}
-                    {/* Device List */}
-                    {/*==================================================*/}
-
-                    <Card>
-
-                        <CardHeader>
-
-                            <CardTitle>
-                                My HonorPoles
-                            </CardTitle>
-
-                            <CardDescription>
-                                Select an HonorPole to view and control
-                            </CardDescription>
-
-                        </CardHeader>
-
-                        <CardContent>
-
-                            {devices.length === 0 ? (
-
-                                <p className="text-sm text-gray-500">
-                                    No devices found.
-                                </p>
-
-                            ) : (
-
-                                <div className="space-y-2">
-
-                                    {devices.map((device) => (
-
-                                        <button
-                                            key={device.deviceId}
-                                            onClick={() =>
-                                selectDevice(device)
-                            } 
-                                            className={`w-full p-3 rounded-lg border text-left transition-colors ${
-                                                selectedDevice === device.deviceId
-                                                    ? "bg-blue-50 border-blue-500"
-                                                    : "bg-white border-gray-200 hover:bg-gray-50"
-                                            }`}
-                                        >
-
-                                            <div className="flex items-center justify-between">
-
-                                                <span className="font-medium">
-                                                    {device.deviceName}
-                                                </span>
-
-						<div className="mt-1 text-xs text-gray-500">
-						    {device.city || device.state || 						device.zipCode
-						        ? `${device.city || ""}${device.city && device.state ? ", " : ""}${device.state || ""}${device.zipCode ? 						` ${device.zipCode}` : ""}`
-						        : "Location not set"}
-						</div>
-
-                                                <Badge
-                                                    className={
-                                                        device.online
-                                                            ? "bg-green-600"
-                                                            : "bg-gray-500"
-                                                    }
-                                                >
-                                                    {device.online
-                                                        ? "Online"
-                                                        : "Offline"}
-                                                </Badge>
-
-                                            </div>
-
-                                            <div className="mt-2 text-xs text-gray-500">
-
-                                                Last Seen:
-
-                                                {" "}
-
-                                    {device.lastSeen &&
-                                    !Number.isNaN(new Date(device.lastSeen).getTime())
-                                        ? new Date(device.lastSeen).toLocaleString()
-                                        : "Not available"}
-
-                                            </div>
-
-                                        </button>
-
-                                    ))}
-
-                                </div>
-
+                            {selectedDevice && (
+                                <Badge
+                                    className={
+                                        telemetry?.online
+                                            ? "bg-green-600"
+                                            : "bg-gray-500"
+                                    }
+                                >
+                                    {telemetry?.online ? "Online" : "Offline"}
+                                </Badge>
                             )}
-
-                        </CardContent>
-
-                    </Card>
-
-                    {/*==================================================*/}
-                    {/* Control Panel */}
-                    {/*==================================================*/}
-
-                    <Card className="lg:col-span-2">
-
-                        <CardHeader>
-
-                            <CardTitle>
-                                HonorPole Control
-                            </CardTitle>
-
-                            <CardDescription>
-
-                                {selectedDevice
-                                    ? devices.find(
-                                        d =>
-                                            d.deviceId ===
-                                            selectedDevice
-                                    )?.deviceName
-                                    : "Select a device"}
-
-                            </CardDescription>
-
-                        </CardHeader>
-
-                        <CardContent>
-
-                            {selectedDevice ? (
-
-                                <div className="space-y-6">
-                                                                     {/*==================================================*/}
-                                    {/* Device Status */}
-                                    {/*==================================================*/}
-
-                                    {telemetry && (
-
-                                        <Card>
-
-                                            <CardHeader>
-
-                                                <CardTitle>
-                                                    Device Status
-                                                </CardTitle>
-
-                                                <CardDescription>
-                                                    Live telemetry from the HonorPole
-                                                </CardDescription>
-
-                                            </CardHeader>
-
-                                            <CardContent>
-
-                                                <div className="grid grid-cols-2 gap-4">
-
-                                                    <div>
-
-                                                        <div className="text-sm text-gray-500">
-                                                            Status
-                                                        </div>
-
-                                                        <Badge
-                                                            className={
-                                                                telemetry.online
-                                                                    ? "bg-green-600"
-                                                                    : "bg-gray-500"
-                                                            }
-                                                        >
-                                                            {telemetry.online
-                                                                ? "ONLINE"
-                                                                : "OFFLINE"}
-                                                        </Badge>
-
-                                                    </div>
-
-                                                    <div>
-
-                                                        <div className="text-sm text-gray-500">
-                                                            Firmware
-                                                        </div>
-
-                                                        <div className="font-semibold">
-                                                            {telemetry.firmware}
-                                                        </div>
-
-                                                    </div>
-
-                                                    <div>
-
-                                                        <div className="text-sm text-gray-500">
-                                                            Current Position
-                                                        </div>
-
-                                                        <div className="font-semibold">
-                                                            {telemetry.currentPosition}
-                                                        </div>
-
-                                                    </div>
-
-                                                    <div>
-
-                                                        <div className="text-sm text-gray-500">
-                                                            Target Position
-                                                        </div>
-
-                                                        <div className="font-semibold">
-                                                            {telemetry.targetPosition}
-                                                        </div>
-
-                                                    </div>
-
-                                                    <div>
-
-                                                        <div className="text-sm text-gray-500">
-                                                            Movement
-                                                        </div>
-
-                                                        <div className="font-semibold">
-                                                            {telemetry.movement}
-                                                        </div>
-
-                                                    </div>
-
-                                                    <div>
-
-                                                        <div className="text-sm text-gray-500">
-                                                            Calibrated
-                                                        </div>
-
-                                                        <div className="font-semibold">
-                                                            {telemetry.calibrated
-                                                                ? "YES"
-                                                                : "NO"}
-                                                        </div>
-
-                                                    </div>
-
-                                                    <div>
-
-                                                        <div className="text-sm text-gray-500">
-                                                            WiFi
-                                                        </div>
-
-                                                        <div className="font-semibold">
-                                                            {telemetry.network.ssid}
-                                                        </div>
-
-                                                    </div>
-
-                                                    <div>
-
-                                                        <div className="text-sm text-gray-500">
-                                                            IP Address
-                                                        </div>
-
-                                                        <div className="font-semibold">
-                                                            {telemetry.network.ipAddress}
-                                                        </div>
-
-                                                    </div>
-
-                                                    <div>
-
-                                                        <div className="text-sm text-gray-500">
-                                                            Signal
-                                                        </div>
-
-                                                        <div className="font-semibold">
-                                                            {telemetry.network.signalStrength} dBm
-                                                        </div>
-
-                                                    </div>
-
-                                                    <div>
-
-                                                        <div className="text-sm text-gray-500">
-                                                            Connection
-                                                        </div>
-
-                                                        <div className="font-semibold">
-                                                            {telemetry.network.wifiConnected
-                                                                ? "Connected"
-                                                                : "Disconnected"}
-                                                        </div>
-
-                                                    </div>
-
-                                                </div>
-
-                                                <hr className="my-6" />
-
-                                                <h3 className="font-semibold mb-3">
-                                                    Half-Staff Directives
-                                                </h3>
-
-                                                <div className="space-y-2 text-sm">
-
-                                                    <div>
-
-                                                        <strong>Federal:</strong>{" "}
-                                                        {telemetry.directives.federal}
-
-                                                    </div>
-
-                                                    <div>
-
-                                                        <strong>State:</strong>{" "}
-                                                        {telemetry.directives.state}
-
-                                                    </div>
-
-                                                    <div>
-
-                                                        <strong>Source:</strong>{" "}
-                                                        {telemetry.directives.source}
-
-                                                    </div>
-
-                                                    <div>
-
-                                                        <strong>Updated:</strong>{" "}
-                                                        {telemetry.directives.updated}
-
-                                                    </div>
-
-                                                </div>
-
-                                            </CardContent>
-
-                                        </Card>
-
-                                    )}
-
-                                    {/*==================================================*/}
-                                    {/* Manual Controls */}
-                                    {/*==================================================*/}
-
-                                    <div className="grid grid-cols-2 gap-4">
-
-                                        <Button
-                                            onClick={() => void handleCommand("full")}
-                                            disabled={loading || !telemetry?.online}
-                                            className="h-20 text-lg bg-green-600 hover:bg-green-700"
-                                        >
-                                            Full Staff
-                                        </Button>
-
-                                        <Button
-                                            onClick={() => void handleCommand("half")}
-                                            disabled={loading || !telemetry?.online}
-                                            className="h-20 text-lg bg-yellow-600 hover:bg-yellow-700"
-                                        >
-                                            Half Staff
-                                        </Button>
-
-                                        <Button
-                                            onClick={() => void handleCommand("down")}
-                                            disabled={loading || !telemetry?.online}
-                                            className="h-20 text-lg bg-red-600 hover:bg-red-700"
-                                        >
-                                            Lower Flag
-                                        </Button>
-
-                                        <Button
-                                            onClick={() => void handleCommand("auto")}
-                                            disabled={loading || !telemetry?.online}
-                                            className="h-20 text-lg bg-blue-600 hover:bg-blue-700"
-                                        >
-                                            Auto Mode
-                                        </Button>
-
-                                        <Button
-                                            onClick={() => void handleCommand("stop")}
-                                            disabled={!telemetry?.online}
-                                            className="col-span-2 h-20 text-lg"
-                                            variant="secondary"
-                                        >
-                                            STOP
-                                        </Button>
-
-                                    </div>
-
-                                    {/*==================================================*/}
-                                    {/* Offline Warning */}
-                                    {/*==================================================*/}
-
-                                    {!telemetry?.online && (
-
-                                        <Alert className="bg-yellow-50 border-yellow-200">
-
-                                            <AlertDescription className="text-yellow-800">
-                                                Device is offline. Controls are disabled until the HonorPole reconnects.
-                                            </AlertDescription>
-
-                                        </Alert>
-
-                                    )}
-
-                                    <div className="text-center text-sm text-gray-500">
-                                        Status updates every 5 seconds
-                                    </div>
-
+                        </div>
+                    </CardHeader>
+
+                    <CardContent className="space-y-6">
+                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                            <h3 className="mb-4 text-center text-xl font-bold text-gray-900">
+                                HonorPole Status
+                            </h3>
+
+                            <div className="divide-y divide-gray-200">
+                                <div className="flex justify-between gap-4 py-3">
+                                    <span className="text-gray-500">Device ID</span>
+                                    <span className="font-semibold text-gray-900">
+                                        {selectedDevice ?? "--"}
+                                    </span>
                                 </div>
 
-                            ) : (
-
-                                <div className="text-center py-12 text-gray-500">
-
-                                    <p>
-                                        Select a device from the list to begin
-                                        controlling it.
-                                    </p>
-
+                                <div className="flex justify-between gap-4 py-3">
+                                    <span className="text-gray-500">Device</span>
+                                    <span className="font-semibold text-gray-900">
+                                        {telemetry?.deviceName ?? selectedDeviceInfo?.deviceName ?? "HonorPole"}
+                                    </span>
                                 </div>
 
+                                <div className="flex justify-between gap-4 py-3">
+                                    <span className="text-gray-500">Firmware</span>
+                                    <span className="font-semibold text-gray-900">
+                                        {telemetry?.firmware ?? selectedDeviceInfo?.firmware ?? "--"}
+                                    </span>
+                                </div>
+
+                                <div className="flex justify-between gap-4 py-3">
+                                    <span className="text-gray-500">Connection</span>
+                                    <span className="font-semibold text-gray-900">
+                                        {telemetry?.online ? "Online" : "Offline"}
+                                    </span>
+                                </div>
+
+                                <div className="flex justify-between gap-4 py-3">
+                                    <span className="text-gray-500">Cloud</span>
+                                    <span className="font-semibold text-gray-900">
+                                        {telemetry?.network?.cloudConnected ? "Connected" : "Disconnected"}
+                                    </span>
+                                </div>
+
+                                <div className="flex justify-between gap-4 py-3">
+                                    <span className="text-gray-500">WiFi</span>
+                                    <span className="font-semibold text-gray-900">
+                                        {telemetry?.network?.wifiConnected ? "Connected" : "Disconnected"}
+                                    </span>
+                                </div>
+
+                                <div className="flex justify-between gap-4 py-3">
+                                    <span className="text-gray-500">IP Address</span>
+                                    <span className="font-semibold text-gray-900">
+                                        {telemetry?.network?.ipAddress || "--"}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                            <div className="rounded-lg bg-gray-100 p-4">
+                                <div className="text-sm text-gray-500">Flag Position</div>
+                                <div className="mt-1 font-semibold text-gray-900">
+                                    {positionPercent === null
+                                        ? "Waiting for status"
+                                        : `${positionPercent}%`}
+                                </div>
+                            </div>
+
+                            <div className="rounded-lg bg-gray-100 p-4">
+                                <div className="text-sm text-gray-500">Operating Mode</div>
+                                <div className="mt-1 font-semibold text-gray-900">
+                                    {operatingMode ?? "Loading"}
+                                </div>
+                            </div>
+
+                            <div className="rounded-lg bg-gray-100 p-4">
+                                <div className="text-sm text-gray-500">Movement</div>
+                                <div className="mt-1 font-semibold text-gray-900">
+                                    {telemetry?.movement ?? "Waiting for status"}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border-2 border-blue-200 bg-blue-50 p-4 text-center">
+                            <div className="text-sm text-blue-700">Controlling</div>
+                            <div className="mt-1 text-lg font-bold text-blue-950">
+                                {selectedDeviceInfo?.deviceName ?? selectedDevice ?? "No HonorPole selected"}
+                            </div>
+                            {selectedDeviceInfo && (
+                                <div className="text-sm text-blue-800">
+                                    {selectedDeviceInfo.deviceId}
+                                </div>
                             )}
+                        </div>
 
-                        </CardContent>
+                        <div className="grid grid-cols-2 gap-4">
+                            <Button
+                                onClick={() => void handleCommand("full")}
+                                disabled={controlsDisabled}
+                                className="h-20 text-lg bg-green-600 hover:bg-green-700"
+                            >
+                                USA Full
+                            </Button>
 
-                    </Card>
+                            <Button
+                                onClick={() => void handleCommand("half")}
+                                disabled={controlsDisabled}
+                                className="h-20 text-lg bg-yellow-600 hover:bg-yellow-700"
+                            >
+                                HALF STAFF
+                            </Button>
 
-                </div>
+                            <Button
+                                onClick={() => void handleCommand("down")}
+                                disabled={controlsDisabled}
+                                className="h-20 text-lg bg-red-600 hover:bg-red-700"
+                            >
+                                DOWN
+                            </Button>
 
+                            <Button
+                                onClick={() => void handleCommand("auto")}
+                                disabled={controlsDisabled}
+                                className="h-20 text-lg bg-blue-600 hover:bg-blue-700"
+                            >
+                                AUTO
+                            </Button>
+
+                            <Button
+                                onClick={() => void handleCommand("stop")}
+                                disabled={switching || !telemetry?.online}
+                                className="col-span-2 h-20 text-xl font-bold bg-red-700 hover:bg-red-800"
+                            >
+                                STOP MOTOR
+                            </Button>
+                        </div>
+
+                        {!telemetry?.online && selectedDevice && !switching && (
+                            <Alert className="bg-yellow-50 border-yellow-200">
+                                <AlertDescription className="text-yellow-800">
+                                    This HonorPole is offline. Controls are disabled until it reconnects.
+                                </AlertDescription>
+                            </Alert>
+                        )}
+
+                        <div className="text-center text-sm text-gray-500">
+                            Status updates every 5 seconds
+                        </div>
+                    </CardContent>
+                </Card>
             </div>
-
         </div>
-
     );
-
 }
-
-
-
 
 
 

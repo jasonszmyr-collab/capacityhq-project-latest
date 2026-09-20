@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { discovery } from "../services/deviceDiscovery";
 
@@ -209,6 +209,29 @@ failureTimer = setTimeout(() => {
 
           </div>
 
+          {failed && (
+            <div className="space-y-4 rounded-xl border border-red-400/40 bg-red-950/70 p-4">
+              <p className="text-center text-sm text-red-100">
+                Confirm the WiFi password, keep HonorPole powered on, and make sure the selected network is 2.4 GHz.
+              </p>
+
+              <button
+                type="button"
+                onClick={() => navigate("/setup", { replace: true })}
+                className="w-full rounded-xl bg-blue-600 py-4 text-lg font-bold"
+              >
+                Try Setup Again
+              </button>
+
+              <button
+                type="button"
+                onClick={() => navigate("/", { replace: true })}
+                className="w-full rounded-xl border border-white/30 bg-white/10 py-3 font-semibold"
+              >
+                Return Home
+              </button>
+            </div>
+          )}
           {progress === 100 && (
 
   <div className="rounded-xl bg-white/10 p-4 text-center space-y-2">
@@ -259,3 +282,4 @@ failureTimer = setTimeout(() => {
   );
 
 }
+

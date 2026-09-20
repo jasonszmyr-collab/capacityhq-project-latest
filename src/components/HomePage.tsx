@@ -2,9 +2,38 @@
  *
  * HonorPole Mobile Application
  * File: HomePage.tsx
- * Version: 2.3.0
+ * Version: 2.3.3
  *
  * Main dashboard for the HonorPole Smart Flag Control System.
+ *
+ * Version 2.3.7:
+ * - Makes the HonorPole selector text fit on phone screens while preserving
+ *   the full desktop layout and native dropdown control.
+ *
+ * Version 2.3.6:
+ * - Matches the Setup page background: the original waving flag video fills
+ *   the viewport in its natural orientation with the stars on the left.
+ *
+ * Version 2.3.5:
+ * - Expands the waving flag video to cover the entire Home background.
+ * - Mirrors the video so the stars appear in the upper-right corner.
+ *
+ * Version 2.3.4:
+ * - Restores the original waving flag video on Home.
+ * - Rotates the complete video frame vertically so the stars remain in the
+ *   upper-right corner and the flag ripples downward without being cropped.
+ *
+ * Version 2.3.3:
+ * - Uses a recognizable photographic flag-and-pole background while keeping
+ *   the dashboard readable and leaving Setup's video background unchanged.
+ *
+ * Version 2.3.2:
+ * - Replaces the nearly invisible CSS silhouette with a responsive vector
+ *   flagpole watermark that remains recognizable on desktop and mobile.
+ *
+ * Version 2.3.1:
+ * - Replaces the distracting flag-photo background with a static navy gradient.
+ * - Adds a subtle, decorative flagpole silhouette with no animation.
  *
  * Version 2.3.0:
  * - Adds live flag-on-pole visualization driven only by device telemetry.
@@ -41,6 +70,7 @@ import {
 
 import type { DeviceTelemetry } from "../types/telemetry";
 import { DefaultTelemetry } from "../types/telemetry";
+import DevicePairing from "./DevicePairing";
 
 //======================================================================
 // Configuration
@@ -50,7 +80,7 @@ function getActiveDeviceId(): string
 {
     return (
         cloudService.getCurrentDeviceId()
-        ?? "HP-001"
+        ?? ""
     );
 }
 
@@ -478,6 +508,27 @@ const HomePage = () =>
             getActiveDeviceId()
         );
 
+    const [showPairing, setShowPairing] =
+    useState(false);    
+
+    useEffect(() =>
+    {
+        if (!showPairing)
+        {
+            return;
+        }
+
+        window.requestAnimationFrame(() =>
+        {
+            document
+                .getElementById("honorpole-pairing")
+                ?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "start"
+                });
+        });
+    }, [showPairing]);
+
     const [device, setDevice] =
         useState<DeviceTelemetry>(
             structuredClone(
@@ -548,6 +599,12 @@ const HomePage = () =>
 
     useEffect(() =>
     {
+        if (!selectedDeviceId)
+        {
+            setDirectiveStatus(null);
+            return;
+        }
+
         let mounted = true;
 
         let unsubscribeTelemetry =
@@ -714,46 +771,6 @@ if (devices.length > 0)
 })();
 
         //------------------------------------------------------------------
-        // Start cloud/local connection
-        //------------------------------------------------------------------
-
-        void cloudService
-            .connect()
-            .then(
-                (connected) =>
-                {
-                    if (!mounted)
-                    {
-                        return;
-                    }
-
-                    setConnectionStatus(
-                        connected
-                            ? "Connected"
-                            : "Disconnected"
-                    );
-                }
-            )
-            .catch(
-                (error) =>
-                {
-                    console.error(
-                        "[HomePage] Connection failed",
-                        error
-                    );
-
-                    if (mounted)
-                    {
-                        setConnectionStatus(
-                            "Disconnected"
-                        );
-
-                        setLoading(false);
-                    }
-                }
-            );
-
-        //------------------------------------------------------------------
         // Cleanup
         //------------------------------------------------------------------
 
@@ -774,6 +791,13 @@ if (devices.length > 0)
 
     useEffect(() =>
     {
+        if (!selectedDeviceId)
+        {
+            setModeLoading(false);
+            setModeError(null);
+            return;
+        }
+
         let mounted = true;
 
         async function loadDirectiveStatus()
@@ -782,8 +806,8 @@ if (devices.length > 0)
             {
                 const status =
                     await getHonorPoleDirectiveStatus(
-                    getActiveDeviceId()
-                );
+                        selectedDeviceId
+                    );
 
                 if (!mounted)
                 {
@@ -801,7 +825,8 @@ if (devices.length > 0)
             }
         }
 
-        loadDirectiveStatus();
+        setDirectiveStatus(null);
+        void loadDirectiveStatus();
 
         const interval =
             window.setInterval(
@@ -814,7 +839,7 @@ if (devices.length > 0)
             mounted = false;
             window.clearInterval(interval);
         };
-    }, []);
+    }, [selectedDeviceId]);
 
 
     //------------------------------------------------------------------
@@ -833,7 +858,9 @@ if (devices.length > 0)
                 setModeError(null);
 
                 const state =
-                    await getHonorPoleMode(getActiveDeviceId());
+                    await getHonorPoleMode(
+                        selectedDeviceId
+                    );
 
                 if (!mounted)
                 {
@@ -883,7 +910,7 @@ if (devices.length > 0)
             mounted = false;
         };
 
-    }, []);
+    }, [selectedDeviceId]);
 
     //------------------------------------------------------------------
     // Derived Display Values
@@ -933,6 +960,7 @@ if (devices.length > 0)
     async function enableAutoMode()
     {
         if (
+            !selectedDeviceId ||
             sendingCommand ||
             modeLoading ||
             testMode
@@ -962,7 +990,7 @@ if (devices.length > 0)
 
             const state =
                 await setHonorPoleMode(
-                    getActiveDeviceId(),
+                    selectedDeviceId,
                     "AUTO"
                 );
 
@@ -1017,6 +1045,7 @@ if (devices.length > 0)
     )
     {
         if (
+            !selectedDeviceId ||
             sendingCommand ||
             modeLoading ||
             testMode
@@ -1055,7 +1084,7 @@ if (devices.length > 0)
 
             const state =
                 await setHonorPoleMode(
-                    getActiveDeviceId(),
+                    selectedDeviceId,
                     persistentMode
                 );
 
@@ -1076,12 +1105,12 @@ if (devices.length > 0)
             );
 
             console.log(
-                `[HomePage] Sending ${command.toUpperCase()} to ${getActiveDeviceId()}`
+                `[HomePage] Sending ${command.toUpperCase()} to ${selectedDeviceId}`
             );
 
             const success =
                 await cloudService.sendCommand(
-                    getActiveDeviceId(),
+                    selectedDeviceId,
                     command
                 );
 
@@ -1129,6 +1158,10 @@ if (devices.length > 0)
 
     async function stopMotor()
     {
+        if (!selectedDeviceId)
+        {
+            return;
+        }
   
         try
         {
@@ -1148,7 +1181,7 @@ if (devices.length > 0)
 
             const success =
                 await cloudService.sendCommand(
-                    getActiveDeviceId(),
+                    selectedDeviceId,
                     "stop"
                 );
 
@@ -1214,7 +1247,9 @@ if (devices.length > 0)
                     </h2>
 
                     <p className="text-gray-400 mt-2">
-                        Device {getActiveDeviceId()}
+                        {selectedDeviceId
+                            ? `Device ${selectedDeviceId}`
+                            : "Loading authorized HonorPoles..."}
                     </p>
 
                 </div>
@@ -1228,31 +1263,92 @@ if (devices.length > 0)
     //------------------------------------------------------------------
 
     return (
-        <div className="relative min-h-screen overflow-hidden">
+        <div className="relative min-h-screen overflow-x-hidden bg-slate-950">
 
             {/* Background */}
 
             <div
-                className="
-                    absolute
-                    inset-0
-                    bg-cover
-                    bg-center
-                    opacity-25
-                "
+                className="absolute inset-0"
                 style={{
-                    backgroundImage:
-                        "url('/flag.jpg')"
+                    background:
+                        "radial-gradient(circle at 50% 18%, rgba(37, 99, 235, 0.14), transparent 38%), linear-gradient(180deg, #07101f 0%, #020617 58%, #030712 100%)"
                 }}
             />
 
+            {/* Home-page-only animated flag background matching Setup. */}
             <div
-                className="
-                    absolute
-                    inset-0
-                    bg-slate-950/70
-                "
-            />
+                className="fixed inset-0 pointer-events-none overflow-hidden"
+                aria-hidden="true"
+            >
+                <video
+                    className="absolute inset-0 h-full w-full object-cover opacity-60"
+                    autoPlay
+                    muted
+                    loop
+                    playsInline
+                    preload="auto"
+                >
+                    <source src="/flag.mp4" type="video/mp4" />
+                </video>
+            </div>
+
+            {/* Previous vector concept retained but intentionally hidden */}
+            <div
+                className="hidden"
+                aria-hidden="true"
+            >
+                <svg
+                    className="h-full w-full"
+                    viewBox="0 0 500 900"
+                    preserveAspectRatio="xMaxYMin meet"
+                    role="presentation"
+                >
+                    <defs>
+                        <linearGradient id="homePoleMetal" x1="0" y1="0" x2="1" y2="0">
+                            <stop offset="0" stopColor="#64748b" />
+                            <stop offset="0.5" stopColor="#f8fafc" />
+                            <stop offset="1" stopColor="#94a3b8" />
+                        </linearGradient>
+                        <linearGradient id="homeFlagFade" x1="0" y1="0" x2="1" y2="0">
+                            <stop offset="0" stopColor="#ffffff" stopOpacity="0.72" />
+                            <stop offset="1" stopColor="#ffffff" stopOpacity="0.18" />
+                        </linearGradient>
+                        <radialGradient id="homePatrioticGlow" cx="72%" cy="23%" r="58%">
+                            <stop offset="0" stopColor="#3b82f6" stopOpacity="0.24" />
+                            <stop offset="1" stopColor="#3b82f6" stopOpacity="0" />
+                        </radialGradient>
+                        <filter id="homeSoftGlow" x="-30%" y="-30%" width="160%" height="160%">
+                            <feGaussianBlur stdDeviation="8" />
+                        </filter>
+                    </defs>
+
+                    <ellipse cx="360" cy="220" rx="205" ry="190" fill="url(#homePatrioticGlow)" />
+
+                    <g opacity="0.78">
+                        <rect x="398" y="91" width="10" height="744" rx="5" fill="#0f172a" opacity="0.7" />
+                        <rect x="394" y="88" width="8" height="744" rx="4" fill="url(#homePoleMetal)" />
+                        <circle cx="398" cy="74" r="14" fill="#fbbf24" opacity="0.36" filter="url(#homeSoftGlow)" />
+                        <circle cx="398" cy="74" r="10" fill="#fbbf24" />
+                        <circle cx="395" cy="71" r="3" fill="#fef3c7" />
+                        <path d="M398 833 L372 865 H424 Z" fill="#94a3b8" />
+                        <rect x="352" y="863" width="92" height="10" rx="5" fill="#64748b" />
+                    </g>
+
+                    <g opacity="0.62">
+                        <path d="M394 106 C330 86 275 137 206 108 C161 89 119 91 72 113 L72 265 C119 242 161 241 206 260 C275 289 330 238 394 258 Z" fill="url(#homeFlagFade)" />
+                        <path d="M394 106 C330 86 275 137 206 108 C161 89 119 91 72 113 L72 136 C119 114 161 112 206 132 C275 160 330 110 394 129 Z" fill="#b91c1c" />
+                        <path d="M394 152 C330 132 275 183 206 154 C161 135 119 137 72 159 L72 182 C119 160 161 158 206 178 C275 206 330 156 394 175 Z" fill="#b91c1c" />
+                        <path d="M394 198 C330 178 275 229 206 200 C161 181 119 183 72 205 L72 228 C119 206 161 204 206 224 C275 252 330 202 394 221 Z" fill="#b91c1c" />
+                        <path d="M394 244 C330 224 275 275 206 246 C161 227 119 229 72 251 L72 265 C119 242 161 241 206 260 C275 289 330 238 394 258 Z" fill="#b91c1c" />
+                        <path d="M72 113 C118 92 161 90 206 108 L206 188 C161 170 119 171 72 193 Z" fill="#1e3a8a" />
+                        <g fill="#f8fafc" opacity="0.9">
+                            <circle cx="95" cy="126" r="3" /><circle cx="121" cy="119" r="3" /><circle cx="147" cy="119" r="3" /><circle cx="176" cy="125" r="3" />
+                            <circle cx="108" cy="145" r="3" /><circle cx="134" cy="140" r="3" /><circle cx="162" cy="143" r="3" /><circle cx="190" cy="150" r="3" />
+                            <circle cx="95" cy="165" r="3" /><circle cx="121" cy="158" r="3" /><circle cx="147" cy="159" r="3" /><circle cx="176" cy="166" r="3" />
+                        </g>
+                    </g>
+                </svg>
+            </div>
 
             {/* Content */}
 
@@ -1268,6 +1364,7 @@ if (devices.length > 0)
                         mx-auto
                         px-6
                         py-8
+                        pb-32
                         space-y-6
                     "
                 >                        {/* ================================================== */}
@@ -1284,70 +1381,149 @@ if (devices.length > 0)
                         "
                     >
                         <label
-                            htmlFor="honorpole-selector"
-                            className="
-                                block
-                                text-sm
-                                font-semibold
-                                text-gray-300
-                                mb-2
-                            "
-                        >
-                            Select HonorPole
-                        </label>
+    htmlFor="honorpole-selector"
+    className="
+        block
+        text-sm
+        font-semibold
+        text-gray-300
+        mb-2
+    "
+>
+    Select HonorPole
+</label>
 
-                        <select
-                            id="honorpole-selector"
-                            value={selectedDeviceId}
-                            onChange={(event) =>
-                            {
-                                const selected =
-                                    availableDevices.find(
-                                        item =>
-                                            item.deviceId ===
-                                            event.target.value
-                                    );
+<select
+    id="honorpole-selector"
+    value={selectedDeviceId}
+    onChange={(event) =>
+    {
+        const selected =
+            availableDevices.find(
+                item =>
+                    item.deviceId === event.target.value
+            );
 
-                                if (!selected)
-                                {
-                                    return;
-                                }
+        if (!selected)
+        {
+            return;
+        }
 
-                                cloudService.setDevice(selected);
+        cloudService.setDevice(selected);
 
-                                setSelectedDeviceId(
-                                    selected.deviceId
-                                );
-                            }}
-                            className="
-                                w-full
-                                rounded-xl
-                                border
-                                border-white/10
-                                bg-slate-950
-                                px-4
-                                py-3
-                                text-white
-                            "
-                        >
-                            {availableDevices.length === 0 && (
-                                <option value={selectedDeviceId}>
-                                    HonorPole — {selectedDeviceId}
-                                </option>
-                            )}
+        setConnectionStatus(
+            `Switching to ${selected.deviceName}...`
+        );
 
-                            {availableDevices.map(
-                                item => (
-                                    <option
-                                        key={item.deviceId}
-                                        value={item.deviceId}
-                                    >
-                                        {item.deviceName} — {item.deviceId}
-                                    </option>
-                                )
-                            )}
-                        </select>
-                    </div>
+        setSelectedDeviceId(
+            selected.deviceId
+        );
+    }}
+    className="
+        w-full
+        min-w-0
+        max-w-full
+        rounded-xl
+        border
+        border-white/10
+        bg-slate-950
+        px-4
+        pr-10
+        py-3
+        text-sm
+        sm:text-base
+        text-white
+    "
+>
+    {availableDevices.length === 0 && (
+        <option value={selectedDeviceId}>
+            No HonorPole selected
+        </option>
+    )}
+
+    {availableDevices.map(
+        item => (
+            <option
+                key={item.deviceId}
+                value={item.deviceId}
+            >
+                {item.deviceName} — {item.deviceId}
+            </option>
+        )
+    )}
+</select>
+
+<button
+    type="button"
+    onClick={() => setShowPairing(true)}
+    className="
+        mt-3
+        w-full
+        rounded-xl
+        border
+        border-white/10
+        bg-slate-800
+        px-4
+        py-3
+        text-sm
+        font-semibold
+        text-white
+    "
+>
+    Add HonorPole
+</button>
+</div>
+
+{showPairing && (
+    <div
+        id="honorpole-pairing"
+        className="
+            scroll-mt-28
+            rounded-2xl
+            border
+            border-white/10
+            bg-slate-900/90
+            p-4
+            shadow-xl
+        "
+    >
+        <div className="mb-4 flex items-center justify-between gap-4">
+            <h2 className="text-lg font-semibold text-white">
+                Add HonorPole
+            </h2>
+
+            <button
+                type="button"
+                onClick={() => setShowPairing(false)}
+                className="
+                    rounded-lg
+                    border
+                    border-slate-600
+                    bg-slate-800
+                    px-3
+                    py-2
+                    text-sm
+                    font-semibold
+                    text-white
+                    hover:bg-slate-700
+                "
+            >
+                Cancel
+            </button>
+        </div>
+
+        <div className="flex justify-center">
+            <DevicePairing
+                onPairingSuccess={(deviceId) =>
+                {
+                    setSelectedDeviceId(deviceId);
+                    setShowPairing(false);
+                    window.location.reload();
+                }}
+            />
+        </div>
+    </div>
+)}
 
                     <InfoCard title="HonorPole Status">
 
@@ -1818,7 +1994,7 @@ if (devices.length > 0)
                             >
                                 Processing{" "}
                                 {sendingCommand.toUpperCase()}{" "}
-                                for {getActiveDeviceId()}...
+                                for {selectedDeviceId}...
                             </div>
                         )}
 
@@ -1917,6 +2093,3 @@ if (devices.length > 0)
 };
 
 export default HomePage;
-
-
-
