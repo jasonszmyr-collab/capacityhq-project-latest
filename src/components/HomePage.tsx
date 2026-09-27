@@ -510,6 +510,9 @@ const HomePage = () =>
 
     const [showPairing, setShowPairing] =
     useState(false);    
+    const [shareCode, setShareCode] = useState<string | null>(null);
+    const [shareError, setShareError] = useState<string | null>(null);
+    const [sharing, setSharing] = useState(false);
 
     useEffect(() =>
     {
@@ -1472,6 +1475,31 @@ if (devices.length > 0)
 >
     Add HonorPole
 </button>
+{selectedDeviceId && (
+    <button type="button" disabled={sharing} onClick={async () => {
+        setSharing(true);
+        setShareError(null);
+        setShareCode(null);
+        try {
+            const result = await cloudService.createShareCode(selectedDeviceId);
+            setShareCode(result.code);
+        } catch (error) {
+            setShareError(error instanceof Error ? error.message : "Unable to share this HonorPole");
+        } finally {
+            setSharing(false);
+        }
+    }} className="mt-3 w-full rounded-xl border border-white/10 bg-slate-800 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
+        {sharing ? "Creating code..." : "Share selected HonorPole"}
+    </button>
+)}
+{shareCode && (
+    <div className="mt-3 rounded-xl border border-blue-400 bg-slate-950 p-4 text-white" role="status">
+        <p>Give this one-use code to the person you want to control {selectedDeviceId}. It expires in 15 minutes.</p>
+        <p className="mt-2 select-all break-all font-mono text-lg font-bold">{shareCode}</p>
+        <p className="mt-2 text-sm">They must sign in with their own account, tap Add HonorPole, then Join a shared HonorPole.</p>
+    </div>
+)}
+{shareError && <p role="alert" className="mt-3 text-sm text-red-200">{shareError}</p>}
 </div>
 
 {showPairing && (

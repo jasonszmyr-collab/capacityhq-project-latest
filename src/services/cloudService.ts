@@ -783,18 +783,38 @@ console.log("Ready.");
     // registerDevice() Overloads
     //------------------------------------------------------
 
+    public async createShareCode(deviceId: string): Promise<{ deviceId: string; code: string; expiresAt: string }> {
+        return this.request(`/api/device/${encodeURIComponent(deviceId)}/share`, { method: "POST" });
+    }
+
+    public async joinSharedDevice(code: string): Promise<string> {
+        const result = await this.request<{ deviceId: string }>("/api/device/share/claim", {
+            method: "POST",
+            body: JSON.stringify({ code: code.trim().toUpperCase() })
+        });
+        this.devices.clear();
+        const devices = await this.getDevices();
+        const device = devices.find(item => item.deviceId === result.deviceId);
+        if (device) this.setDevice(device);
+        return result.deviceId;
+    }
+
+    //------------------------------------------------------
+
     public registerDevice(
         device: DeviceInfo
     ): Promise<void>;
 
     public registerDevice(
         pairingCode: string,
-        deviceName: string
+        deviceName: string,
+        deviceId?: string
     ): Promise<DeviceInfo>;
 
     public async registerDevice(
         value1: DeviceInfo | string,
-        value2?: string
+        value2?: string,
+        deviceId?: string
     ): Promise<DeviceInfo | void>
     {
         //--------------------------------------------------
@@ -820,7 +840,8 @@ console.log("Ready.");
 
                     body: JSON.stringify({
                         pairingCode: value1,
-                        deviceName: value2
+                        deviceName: value2,
+                        deviceId
                     })
                 }
             );

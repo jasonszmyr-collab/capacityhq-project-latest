@@ -520,6 +520,11 @@ function queueCommand(deviceId, command, source = "MANUAL") {
     return null;
   }
 
+  // A STOP waiting for delivery must not be replaced by another phone.
+  if (motor !== "STOP" && targetState.commandPending && targetState.motor === "STOP") {
+    return null;
+  }
+
   const commandId = makeId("cmd");
   const now = Date.now();
 
@@ -597,6 +602,8 @@ app.post("/auto/control", requireAutoControlAuth, (req, res) => {
     "AUTO"
   );
 
+  if (!queued) return res.status(409).json({ success: false, error: "STOP is pending" });
+
   res.json({
     success: true,
     deviceId,
@@ -651,6 +658,8 @@ app.post(
       motor,
       source
     );
+
+    if (!queued) return res.status(409).json({ success: false, error: "STOP is pending" });
 
     res.json({
       success: true,
@@ -735,6 +744,8 @@ const queued =
     motor,
     source
   );
+
+    if (!queued) return res.status(409).json({ success: false, error: "STOP is pending" });
 
     res.json({
       success: true,
@@ -1134,7 +1145,8 @@ app.post(
     try {
       const response = await fetch(
         `${SUPABASE_URL}/rest/v1/devices` +
-          `?device_id=eq.${encodeURIComponent(req.deviceId)}`,
+          `?device_id=eq.${encodeURIComponent(req.deviceId)}` +
+          `&pairing_claimed_at=is.null&is_active=eq.true`,
         {
           method: "PATCH",
           headers: {
@@ -1172,6 +1184,12 @@ app.post(
           error:
             "Unable to register pairing code"
         });
+      }
+
+      // A missing factory device row cannot yield a usable pairing code.
+      const updated = JSON.parse(body);
+      if (!Array.isArray(updated) || updated.length !== 1) {
+        return res.status(409).json({ success: false, error: "Device is already claimed or its factory record is missing" });
       }
 
       return res.status(200).json({
@@ -1228,6 +1246,13 @@ app.post(
         ? req.body.pairingCode.trim().toUpperCase()
         : "";
 
+    const requestedDeviceId =
+      typeof req.body?.deviceId === "string" ? req.body.deviceId.trim().toUpperCase() : "";
+
+    if (requestedDeviceId && !/^HP-[0-9]{3,6}$/.test(requestedDeviceId)) {
+      return res.status(400).json({ success: false, error: "Invalid device ID" });
+    }
+
     const deviceName =
       typeof req.body?.deviceName === "string"
         ? req.body.deviceName.trim()
@@ -1247,6 +1272,7 @@ app.post(
       const deviceUrl =
         `${SUPABASE_URL}/rest/v1/devices` +
         `?pairing_code_hash=eq.${encodeURIComponent(pairingCodeHash)}` +
+        (requestedDeviceId ? `&device_id=eq.${encodeURIComponent(requestedDeviceId)}` : "") +
         `&is_active=eq.true` +
         `&select=*` +
         `&limit=1`;
@@ -1405,6 +1431,77 @@ if (!claimResponse.ok) {
 // DEVICE DISCOVERY
 // Returns every HonorPole assigned to the authenticated user.
 // =========================================================
+
+// Owner creates a one-use code. The other person signs in on their own phone
+// and redeems it; the board and its factory pairing secret are never reused.
+app.post(
+  "/api/device/:deviceId/share",
+  requireSupabaseAuth,
+  requireDeviceAccess,
+  async (req, res) => {
+    if (req.deviceMembership?.role !== "admin") {
+      return res.status(403).json({ success: false, error: "Only a device administrator can share it" });
+    }
+    if (!SUPABASE_SERVICE_ROLE_KEY) {
+      return res.status(503).json({ success: false, error: "Sharing is unavailable" });
+    }
+    const code = crypto.randomBytes(9).toString("hex").toUpperCase().match(/.{6}/g).join("-");
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    try {
+      const response = await fetch(`${SUPABASE_URL}/rest/v1/honorpole_shares`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          token_hash: hashPairingCode(code),
+          device_id: req.params.deviceId,
+          created_by: req.user.id,
+          expires_at: expiresAt
+        })
+      });
+      if (!response.ok) {
+        console.error("Share creation failed:", response.status);
+        return res.status(503).json({ success: false, error: "Unable to create share code" });
+      }
+      return res.json({ deviceId: req.params.deviceId, code, expiresAt });
+    } catch (error) {
+      console.error("Share creation error:", error);
+      return res.status(503).json({ success: false, error: "Unable to create share code" });
+    }
+  }
+);
+
+app.post("/api/device/share/claim", requireSupabaseAuth, async (req, res) => {
+  const code = typeof req.body?.code === "string" ? req.body.code.trim().toUpperCase() : "";
+  if (!/^[A-F0-9]{6}(?:-[A-F0-9]{6}){2}$/.test(code)) {
+    return res.status(400).json({ success: false, error: "Enter a valid share code" });
+  }
+  try {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/redeem_honorpole_share`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${req.accessToken}`,
+        apikey: process.env.SUPABASE_ANON_KEY || "",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ p_token_hash: hashPairingCode(code) })
+    });
+    if (!response.ok) {
+      return res.status(response.status === 400 ? 400 : 503).json({
+        success: false,
+        error: response.status === 400 ? "Code expired, used, or belongs to your own account" : "Unable to join this HonorPole"
+      });
+    }
+    const deviceId = await response.json();
+    return res.json({ success: true, deviceId });
+  } catch (error) {
+    console.error("Share claim error:", error);
+    return res.status(503).json({ success: false, error: "Unable to join this HonorPole" });
+  }
+});
 
 app.get("/api/devices", requireSupabaseAuth, async (req, res) => {
   if (!req.accessToken || !req.user?.id) {
