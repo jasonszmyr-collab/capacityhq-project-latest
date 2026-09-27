@@ -568,6 +568,30 @@ function queueCommand(deviceId, command, source = "MANUAL") {
 // APP / AUTO / TEST SEND COMMAND
 // =========================================================
 
+// Authenticated, device-specific telemetry for the scheduled AUTO evaluator.
+// Never fall back to HP-001 if a device_id is missing or invalid.
+app.get("/auto/status", requireAutoControlAuth, (req, res) => {
+  const deviceId = typeof req.query.device_id === "string"
+    ? req.query.device_id.trim() : "";
+  if (!/^HP-[0-9]{3,}$/.test(deviceId)) {
+    return res.status(400).json({ error: "Valid device_id required" });
+  }
+  const targetState = getDeviceState(deviceId);
+  res.json({
+    deviceId,
+    online: targetState.online === true,
+    status: targetState.status,
+    state: targetState.state,
+    motor: targetState.motor,
+    position: targetState.position,
+    target: targetState.target,
+    full: targetState.full,
+    half: targetState.half,
+    calibrated: targetState.calibrated === true,
+    lastSeen: targetState.lastSeen,
+    command: { pending: targetState.commandPending === true }
+  });
+});
 app.post("/auto/control", requireAutoControlAuth, (req, res) => {
   const body = req.body || {};
 
