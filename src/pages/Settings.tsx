@@ -5,6 +5,7 @@ import PageHeader from "../components/PageHeader";
 import BottomNav from "../components/BottomNav";
 import { supabase } from "../services/supabaseClient";
 import { cloudService } from "../services/cloudService";
+import InstallationSettings from "../components/honor-pole/InstallationSettings";
 
 export default function Settings() {
   const navigate = useNavigate();
@@ -125,6 +126,7 @@ export default function Settings() {
       <PageHeader title="Settings" />
 
       <main className="pt-20 px-4 max-w-xl mx-auto">
+      <InstallationSettings />
         <section className="rounded-xl border border-white/10 bg-white/5 p-5 mb-4">
           <h2 className="text-lg font-semibold mb-2">
             Privacy
