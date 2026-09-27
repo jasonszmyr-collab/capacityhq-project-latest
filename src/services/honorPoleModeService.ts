@@ -1,3 +1,5 @@
+import cloudService from "./cloudService";
+
 export type HonorPoleOverrideMode =
     | "AUTO"
     | "FULL"
@@ -13,6 +15,16 @@ export interface HonorPoleModeState
 
 const MODE_API =
     "https://honor-pole-copy-07acad67.base44.app/functions/honorPoleOverrideMode";
+
+function authorizedHeaders(): Record<string, string>
+{
+    const token = cloudService.getAuthToken();
+    if (!token)
+    {
+        throw new Error("Sign in to control an HonorPole");
+    }
+    return { Authorization: `Bearer ${token}` };
+}
 
 //----------------------------------------------------------
 // Read Persistent Operating Mode
@@ -31,6 +43,7 @@ export async function getHonorPoleMode(
             method: "GET",
             headers:
             {
+                ...authorizedHeaders(),
                 Accept: "application/json"
             }
         }
@@ -62,6 +75,7 @@ export async function setHonorPoleMode(
 
             headers:
             {
+                ...authorizedHeaders(),
                 "Content-Type": "application/json",
                 Accept: "application/json"
             },
