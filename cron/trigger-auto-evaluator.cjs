@@ -24,6 +24,9 @@ if (!endpoint || !/^https:\/\//.test(endpoint) || !key || key.length < 32) {
           body: JSON.stringify({
             scheduler_key: key,
             dry_run: process.env.AUTO_EVALUATOR_DRY_RUN !== 'false',
+            ...(process.env.AUTO_EVALUATOR_DRY_RUN !== 'false'
+              ? { evaluate_all: true }
+              : {}),
           }),
           signal: controller.signal,
         });
