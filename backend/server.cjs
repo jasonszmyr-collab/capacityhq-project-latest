@@ -70,56 +70,19 @@ function hashPairingCode(pairingCode) {
     .digest("hex");
 }
 
-function requireDevicePairingAuth(req, res, next) {
-  const deviceId =
-    typeof req.body?.deviceId === "string"
-      ? req.body.deviceId.trim()
-      : "";
-
-  const providedSecret =
-    typeof req.headers["x-device-secret"] === "string"
-      ? req.headers["x-device-secret"].trim()
-      : "";
-
-  if (!deviceId || !providedSecret) {
-    return res.status(401).json({
-      success: false,
-      error: "Device authentication required"
-    });
-  }
-
-  const expectedSecret =
-    DEVICE_PAIRING_SECRETS[deviceId];
-
-  if (!expectedSecret) {
-    return res.status(401).json({
-      success: false,
-      error: "Unknown device"
-    });
-  }
-
-  const providedBuffer =
-    Buffer.from(providedSecret);
-
-  const expectedBuffer =
-    Buffer.from(expectedSecret);
-
-  if (
-    providedBuffer.length !== expectedBuffer.length ||
-    !crypto.timingSafeEqual(
-      providedBuffer,
-      expectedBuffer
-    )
-  ) {
-    return res.status(401).json({
-      success: false,
-      error: "Invalid device credentials"
-    });
-  }
-
-  req.deviceId = deviceId;
-  next();
-}
+const { createFactoryRegistry } = require("./factory-registry.cjs");
+const factoryRegistry = createFactoryRegistry({
+  supabaseUrl: SUPABASE_URL,
+  serviceKey: SUPABASE_SERVICE_ROLE_KEY,
+  anonKey: process.env.SUPABASE_ANON_KEY || "",
+  legacySecrets: DEVICE_PAIRING_SECRETS,
+  enabled: process.env.DEVICE_REGISTRY_ENABLED === "true",
+  factorySecret: process.env.FACTORY_PROVISIONING_SECRET || "",
+  legacyTelemetryIds: (process.env.LEGACY_TELEMETRY_DEVICE_IDS || "")
+    .split(",").map(id => id.trim()).filter(Boolean)
+});
+const requireDevicePairingAuth = factoryRegistry.requirePairingAuth;
+app.post("/api/factory/devices", factoryRegistry.register);
 
 async function requireSupabaseAuth(req, res, next) {
   const authorization =
@@ -791,7 +754,7 @@ const queued =
 // ESP32 POLLS FOR COMMAND
 // =========================================================
 
-app.get("/control", (req, res) => {
+app.get("/control", factoryRegistry.requireTelemetryAuth, (req, res) => {
   const deviceId =
     typeof req.query.device_id === "string" &&
     req.query.device_id.trim()
@@ -889,7 +852,7 @@ app.get("/control", (req, res) => {
 // ESP32 STATUS UPDATE
 // =========================================================
 
-app.post("/status", (req, res) => {
+app.post("/status", factoryRegistry.requireTelemetryAuth, (req, res) => {
   console.log("POST /status HIT");
 
   const data = req.body || {};
@@ -1246,7 +1209,10 @@ app.post(
 app.post(
   "/api/device/register",
   requireSupabaseAuth,
-  async (req, res) => {
+  (req, res) => factoryRegistry.claim(req, res, legacyDeviceClaim)
+);
+
+async function legacyDeviceClaim(req, res) {
     if (!req.user?.id) {
       return res.status(401).json({
         success: false,
@@ -1448,8 +1414,7 @@ if (!claimResponse.ok) {
         error: "Device pairing failed"
       });
     }
-  }
-);
+}
 
 // =========================================================
 // DEVICE DISCOVERY
