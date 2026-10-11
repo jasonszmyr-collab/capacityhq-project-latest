@@ -253,7 +253,12 @@ async function requireDeviceAccess(req, res, next) {
       });
     }
 
-    req.deviceMembership = memberships[0];
+    const membership = memberships.find(row =>
+      row?.device_id === deviceId && row?.user_id === req.user.id);
+    if (!membership) {
+      return res.status(403).json({success: false, error: 'Not authorized for this device'});
+    }
+    req.deviceMembership = membership;
     next();
   } catch (error) {
     console.error(
@@ -266,6 +271,14 @@ async function requireDeviceAccess(req, res, next) {
       error: "Authorization service unavailable"
     });
   }
+}
+
+// Explicitly shared viewers can control their assigned pole; sharing stays admin-only.
+function requireDeviceCommandAccess(req, res, next) {
+  if (!['admin', 'viewer'].includes(req.deviceMembership?.role)) {
+    return res.status(403).json({success: false, error: 'Device control permission required'});
+  }
+  next();
 }
 
 // =========================================================
@@ -336,9 +349,40 @@ const state = getDeviceState(DEVICE_ID);
 
 const server = http.createServer(app);
 
-const wss = new WebSocket.Server({
-  server
-});
+// Browser clients already pass token + deviceId in the WebSocket URL.
+// Authenticate before accepting the upgrade; never subscribe to a default pole.
+async function authorizeWebSocket(info, done) {
+  try {
+    const url = new URL(info.req.url, 'http://localhost');
+    const tokens = url.searchParams.getAll('token');
+    const ids = url.searchParams.getAll('deviceId');
+    if (url.pathname !== '/ws' || tokens.length !== 1 || !tokens[0].trim() ||
+        ids.length !== 1 || !/^HP-[0-9]{3,6}$/.test(ids[0])) {
+      return done(false, 401, 'WebSocket authentication required');
+    }
+    const token = tokens[0];
+    const headers = {Authorization: `Bearer ${token}`, apikey: process.env.SUPABASE_ANON_KEY || ''};
+    const userResponse = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers, signal: AbortSignal.timeout(8000)
+    });
+    if (!userResponse.ok) return done(false, 401, 'Invalid authentication');
+    const user = await userResponse.json();
+    if (!user?.id) return done(false, 401, 'Invalid authentication');
+    const membershipResponse = await fetch(`${SUPABASE_URL}/rest/v1/device_users` +
+      `?device_id=eq.${encodeURIComponent(ids[0])}&user_id=eq.${encodeURIComponent(user.id)}` +
+      '&select=device_id,user_id,role', {headers, signal: AbortSignal.timeout(8000)});
+    if (!membershipResponse.ok) return done(false, 503, 'Authorization unavailable');
+    const rows = await membershipResponse.json();
+    if (!Array.isArray(rows) || !rows.some(row => row.device_id === ids[0] && row.user_id === user.id)) {
+      return done(false, 403, 'Not authorized for this device');
+    }
+    info.req.honorPoleDeviceId = ids[0];
+    return done(true);
+  } catch {
+    return done(false, 503, 'Authentication unavailable');
+  }
+}
+const wss = new WebSocket.Server({server, verifyClient: authorizeWebSocket});
 
 // =========================================================
 // BROADCAST HELPER
@@ -357,7 +401,7 @@ function broadcastState(deviceId = DEVICE_ID) {
   });
 
   wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
+    if (client.readyState === WebSocket.OPEN && client.honorPoleDeviceId === deviceId) {
       client.send(data);
     }
   });
@@ -367,7 +411,13 @@ function broadcastState(deviceId = DEVICE_ID) {
 // WEBSOCKET CONNECTION
 // =========================================================
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+  const subscribedDeviceId = req?.honorPoleDeviceId;
+  if (!/^HP-[0-9]{3,6}$/.test(subscribedDeviceId || '')) {
+    ws.close(1008, 'Authenticated device subscription required');
+    return;
+  }
+  ws.honorPoleDeviceId = subscribedDeviceId;
   console.log("WebSocket client connected");
 
   ws.isAlive = true;
@@ -375,10 +425,10 @@ wss.on("connection", (ws) => {
   ws.send(
   JSON.stringify({
     type: "telemetry",
-    deviceId: DEVICE_ID,
+    deviceId: subscribedDeviceId,
     data: {
-      ...getDeviceState(DEVICE_ID),
-      deviceId: DEVICE_ID
+      ...getDeviceState(subscribedDeviceId),
+      deviceId: subscribedDeviceId
     }
   })
 );
@@ -564,12 +614,17 @@ app.post("/auto/control", requireAutoControlAuth, (req, res) => {
 
   const motor = normalizeCommand(requestedCommand);
 
-  const deviceId =
-    typeof body.device_id === "string" && body.device_id.trim()
-      ? body.device_id.trim()
-      : typeof body.deviceId === "string" && body.deviceId.trim()
-        ? body.deviceId.trim()
-        : DEVICE_ID;
+  const snake = body.device_id;
+  const camel = body.deviceId;
+  if ((snake !== undefined && typeof snake !== 'string') ||
+      (camel !== undefined && typeof camel !== 'string') ||
+      (snake !== undefined && camel !== undefined && snake.trim() !== camel.trim())) {
+    return res.status(400).json({success: false, error: 'Valid explicit device ID required'});
+  }
+  const deviceId = (snake ?? camel ?? '').trim();
+  if (!/^HP-[0-9]{3,6}$/.test(deviceId)) {
+    return res.status(400).json({success: false, error: 'Valid explicit device ID required'});
+  }
 
   console.log("POST /auto/control");
   console.log("DEVICE:", deviceId);
@@ -606,6 +661,7 @@ app.post(
   "/control",
   requireSupabaseAuth,
   requireDeviceAccess,
+  requireDeviceCommandAccess,
   (req, res) => {
     const body = req.body || {};
 
@@ -669,6 +725,7 @@ app.post(
   "/api/device/:deviceId/command",
   requireSupabaseAuth,
   requireDeviceAccess,
+  requireDeviceCommandAccess,
   (req, res) => {
     const deviceId =
   typeof req.params.deviceId === "string"
