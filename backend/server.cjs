@@ -71,6 +71,8 @@ function hashPairingCode(pairingCode) {
 }
 
 const { createFactoryRegistry } = require("./factory-registry.cjs");
+const { createSetupAccess } = require("./setup-access.cjs");
+const phoneSetup = createSetupAccess({getState: id => getDeviceState(id)});
 const factoryRegistry = createFactoryRegistry({
   supabaseUrl: SUPABASE_URL,
   serviceKey: SUPABASE_SERVICE_ROLE_KEY,
@@ -810,6 +812,12 @@ const queued =
 // =========================================================
 // ESP32 POLLS FOR COMMAND
 // =========================================================
+
+// Setup uses strict device credentials, never telemetry compatibility bypass.
+app.post("/api/device/:deviceId/setup", requireSupabaseAuth, requireDeviceAccess, phoneSetup.open);
+app.get("/api/device/:deviceId/setup/:requestId", requireSupabaseAuth, requireDeviceAccess, phoneSetup.status);
+app.get("/setup/poll", factoryRegistry.requirePairingAuth, phoneSetup.poll);
+app.post("/setup/result", factoryRegistry.requirePairingAuth, phoneSetup.acknowledge);
 
 app.get("/control", factoryRegistry.requireTelemetryAuth, (req, res) => {
   const deviceId =
