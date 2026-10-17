@@ -137,6 +137,46 @@ function createFactoryRegistry({supabaseUrl, serviceKey, anonKey, legacySecrets 
         }
     }
 
+    // Enroll an existing explicitly allowed legacy device. Never allocate an ID,
+    // issue a pairing code, or alter ownership. SQL serializes retries/conflicts.
+    async function migrate(req, res) {
+        if (!enabled) return res.status(503).json({success: false, error: 'Factory registration disabled'});
+        if (!SECRET_PATTERN.test(factorySecret) ||
+            !safeEqual(req.headers['x-honorpole-factory-secret'], factorySecret)) {
+            return res.status(401).json({success: false, error: 'Factory authentication required'});
+        }
+        const {deviceId, requestId, secret} = req.body || {};
+        if (typeof deviceId !== 'string' || !DEVICE_PATTERN.test(deviceId) ||
+            !legacyIds.has(deviceId) || typeof requestId !== 'string' ||
+            !UUID_PATTERN.test(requestId) || typeof secret !== 'string' ||
+            !SECRET_PATTERN.test(secret)) {
+            return res.status(400).json({success: false, error: 'Invalid legacy migration request'});
+        }
+        const secretHash = sha256(secret);
+        const registrationHash = sha256(JSON.stringify(['legacy-migrate-v1',
+            deviceId, requestId.toLowerCase(), secretHash]));
+        try {
+            const data = await rpc('honorpole_factory_migrate', {
+                p_device_id: deviceId, p_request_id: requestId,
+                p_secret_hash: secretHash, p_registration_hash: registrationHash
+            });
+            if (!data || data.deviceId !== deviceId || data.created !== false ||
+                data.claimed !== true || typeof data.migrated !== 'boolean') {
+                throw new Error('Invalid migration result');
+            }
+            cache.delete(deviceId);
+            return res.status(200).json({success: true, deviceId,
+                created: false, claimed: true, migrated: data.migrated});
+        } catch (error) {
+            const status = {HP400:400, HP404:404, HP409:409}[error.code] || 503;
+            return res.status(status).json({success: false, error: {
+                400:'Invalid legacy migration request', 404:'Existing device not found',
+                409:'Migration conflict; preserve the existing stage',
+                503:'Legacy migration unavailable'
+            }[status]});
+        }
+    }
+
     async function claim(req, res, legacyHandler) {
         if (!enabled) return legacyHandler(req, res);
         const pairingCode = typeof req.body?.pairingCode === 'string' ? req.body.pairingCode.trim().toUpperCase() : '';
@@ -164,6 +204,6 @@ function createFactoryRegistry({supabaseUrl, serviceKey, anonKey, legacySecrets 
             }[status]});
         }
     }
-    return {requirePairingAuth, requireTelemetryAuth, register, claim};
+    return {requirePairingAuth, requireTelemetryAuth, register, migrate, claim};
 }
 module.exports = {createFactoryRegistry};

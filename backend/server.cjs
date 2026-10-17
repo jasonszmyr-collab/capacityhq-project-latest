@@ -85,6 +85,7 @@ const factoryRegistry = createFactoryRegistry({
 });
 const requireDevicePairingAuth = factoryRegistry.requirePairingAuth;
 app.post("/api/factory/devices", factoryRegistry.register);
+app.post("/api/factory/devices/migrate", factoryRegistry.migrate);
 
 async function requireSupabaseAuth(req, res, next) {
   const authorization =
