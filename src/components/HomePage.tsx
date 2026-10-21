@@ -514,6 +514,11 @@ const HomePage = () =>
     const [shareError, setShareError] = useState<string | null>(null);
     const [sharing, setSharing] = useState(false);
 
+    useEffect(() => {
+        setShareCode(null);
+        setShareError(null);
+    }, [selectedDeviceId]);
+
     useEffect(() =>
     {
         if (!showPairing)
@@ -1475,7 +1480,7 @@ if (devices.length > 0)
 >
     Add HonorPole
 </button>
-{selectedDeviceId && (
+{selectedDeviceId && availableDevices.find(item => item.deviceId === selectedDeviceId)?.role === 'admin' && (
     <button type="button" disabled={sharing} onClick={async () => {
         setSharing(true);
         setShareError(null);
@@ -1484,7 +1489,7 @@ if (devices.length > 0)
             const result = await cloudService.createShareCode(selectedDeviceId);
             setShareCode(result.code);
         } catch (error) {
-            setShareError(error instanceof Error ? error.message : "Unable to share this HonorPole");
+            setShareError("Unable to create a share code. Check your connection and administrator access, then try again.");
         } finally {
             setSharing(false);
         }

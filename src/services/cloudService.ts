@@ -107,6 +107,7 @@ export interface DeviceStatus
 
 export interface DeviceInfo
 {
+    role?: string | null;
     deviceId: string;
 
     deviceName: string;
