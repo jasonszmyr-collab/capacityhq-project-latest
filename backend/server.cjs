@@ -352,8 +352,35 @@ const state = getDeviceState(DEVICE_ID);
 
 const server = http.createServer(app);
 
-// Browser clients already pass token + deviceId in the WebSocket URL.
-// Authenticate before accepting the upgrade; never subscribe to a default pole.
+// Authenticate upgrades and revalidate every telemetry delivery. Keep credentials
+// private to the connection lifecycle; never log URLs or persist bearer tokens.
+const webSocketAccess = new WeakMap();
+const WS_ACCESS_RECHECK_MS = 10000;
+
+async function checkWebSocketAccess(token, deviceId, expectedUserId) {
+  try {
+    // One shared deadline bounds the entire auth + membership check.
+    const signal = AbortSignal.timeout(8000);
+    const headers = {Authorization: `Bearer ${token}`, apikey: process.env.SUPABASE_ANON_KEY || ''};
+    const userResponse = await fetch(`${SUPABASE_URL}/auth/v1/user`, {headers, signal});
+    if (!userResponse.ok) {
+      return {status: [401, 403].includes(userResponse.status) ? 401 : 503};
+    }
+    const user = await userResponse.json();
+    if (!user?.id || (expectedUserId && user.id !== expectedUserId)) return {status: 401};
+    const membershipResponse = await fetch(`${SUPABASE_URL}/rest/v1/device_users` +
+      `?device_id=eq.${encodeURIComponent(deviceId)}&user_id=eq.${encodeURIComponent(user.id)}` +
+      '&select=device_id,user_id,role', {headers, signal});
+    if (!membershipResponse.ok) return {status: 503};
+    const rows = await membershipResponse.json();
+    if (!Array.isArray(rows)) return {status: 503};
+    if (!rows.some(row => row?.device_id === deviceId && row?.user_id === user.id)) return {status: 403};
+    return {status: 200, userId: user.id};
+  } catch {
+    return {status: 503};
+  }
+}
+
 async function authorizeWebSocket(info, done) {
   try {
     const url = new URL(info.req.url, 'http://localhost');
@@ -363,27 +390,45 @@ async function authorizeWebSocket(info, done) {
         ids.length !== 1 || !/^HP-[0-9]{3,6}$/.test(ids[0])) {
       return done(false, 401, 'WebSocket authentication required');
     }
-    const token = tokens[0];
-    const headers = {Authorization: `Bearer ${token}`, apikey: process.env.SUPABASE_ANON_KEY || ''};
-    const userResponse = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers, signal: AbortSignal.timeout(8000)
-    });
-    if (!userResponse.ok) return done(false, 401, 'Invalid authentication');
-    const user = await userResponse.json();
-    if (!user?.id) return done(false, 401, 'Invalid authentication');
-    const membershipResponse = await fetch(`${SUPABASE_URL}/rest/v1/device_users` +
-      `?device_id=eq.${encodeURIComponent(ids[0])}&user_id=eq.${encodeURIComponent(user.id)}` +
-      '&select=device_id,user_id,role', {headers, signal: AbortSignal.timeout(8000)});
-    if (!membershipResponse.ok) return done(false, 503, 'Authorization unavailable');
-    const rows = await membershipResponse.json();
-    if (!Array.isArray(rows) || !rows.some(row => row.device_id === ids[0] && row.user_id === user.id)) {
-      return done(false, 403, 'Not authorized for this device');
+    const result = await checkWebSocketAccess(tokens[0], ids[0]);
+    if (result.status !== 200) {
+      return done(false, result.status, result.status === 403
+        ? 'Not authorized for this device' : 'WebSocket authentication unavailable or invalid');
     }
     info.req.honorPoleDeviceId = ids[0];
+    webSocketAccess.set(info.req, {token: tokens[0], userId: result.userId, deviceId: ids[0]});
     return done(true);
   } catch {
     return done(false, 503, 'Authentication unavailable');
   }
+}
+
+// Coalesce overlapping requests per socket. No telemetry is sent while checking;
+// after approval, construct the latest snapshot instead of replaying queued data.
+function refreshWebSocketAccess(ws, sendTelemetry = false) {
+  const access = webSocketAccess.get(ws);
+  if (!access || ws.readyState !== WebSocket.OPEN) return Promise.resolve();
+  access.sendTelemetry = access.sendTelemetry || sendTelemetry;
+  if (access.pending) return access.pending;
+  access.pending = (async () => {
+    const result = await checkWebSocketAccess(access.token, access.deviceId, access.userId);
+    if (webSocketAccess.get(ws) !== access || ws.readyState !== WebSocket.OPEN) return;
+    if (result.status !== 200) {
+      webSocketAccess.delete(ws);
+      ws.close(result.status === 503 ? 1013 : 1008,
+        result.status === 503 ? 'Authorization unavailable' : 'Device access no longer authorized');
+      return;
+    }
+    if (access.sendTelemetry) {
+      access.sendTelemetry = false;
+      ws.send(JSON.stringify({type: 'telemetry', deviceId: access.deviceId,
+        data: {...getDeviceState(access.deviceId), deviceId: access.deviceId}}));
+    }
+  })().catch(() => {
+    webSocketAccess.delete(ws);
+    if (ws.readyState === WebSocket.OPEN) ws.close(1013, 'Authorization unavailable');
+  }).finally(() => {access.pending = null;});
+  return access.pending;
 }
 const wss = new WebSocket.Server({server, verifyClient: authorizeWebSocket});
 
@@ -392,20 +437,9 @@ const wss = new WebSocket.Server({server, verifyClient: authorizeWebSocket});
 // =========================================================
 
 function broadcastState(deviceId = DEVICE_ID) {
-  const state = getDeviceState(deviceId);
-
-  const data = JSON.stringify({
-    type: "telemetry",
-    deviceId,
-    data: {
-      ...state,
-      deviceId
-    }
-  });
-
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN && client.honorPoleDeviceId === deviceId) {
-      client.send(data);
+      void refreshWebSocketAccess(client, true);
     }
   });
 }
@@ -416,38 +450,41 @@ function broadcastState(deviceId = DEVICE_ID) {
 
 wss.on("connection", (ws, req) => {
   const subscribedDeviceId = req?.honorPoleDeviceId;
-  if (!/^HP-[0-9]{3,6}$/.test(subscribedDeviceId || '')) {
+  const access = req && webSocketAccess.get(req);
+  if (req) webSocketAccess.delete(req);
+  if (!access || access.deviceId !== subscribedDeviceId || !/^HP-[0-9]{3,6}$/.test(subscribedDeviceId || '')) {
     ws.close(1008, 'Authenticated device subscription required');
     return;
   }
   ws.honorPoleDeviceId = subscribedDeviceId;
+  webSocketAccess.set(ws, access);
   console.log("WebSocket client connected");
 
   ws.isAlive = true;
-
-  ws.send(
-  JSON.stringify({
-    type: "telemetry",
-    deviceId: subscribedDeviceId,
-    data: {
-      ...getDeviceState(subscribedDeviceId),
-      deviceId: subscribedDeviceId
-    }
-  })
-);
 
   ws.on("pong", () => {
     ws.isAlive = true;
   });
 
   ws.on("close", () => {
+    webSocketAccess.delete(ws);
     console.log("WebSocket client disconnected");
   });
 
-  ws.on("error", (error) => {
-    console.error("WebSocket error:", error.message);
+  ws.on("error", () => {
+    webSocketAccess.delete(ws);
+    ws.terminate();
+    console.error("WebSocket transport error");
   });
+
+  return refreshWebSocketAccess(ws, true);
 });
+
+// Check idle connections too. A check takes at most eight seconds; telemetry
+// deliveries always require their own fresh approval, even before this tick.
+setInterval(() => {
+  for (const ws of wss.clients) void refreshWebSocketAccess(ws);
+}, WS_ACCESS_RECHECK_MS);
 
 // =========================================================
 // WEBSOCKET KEEPALIVE
