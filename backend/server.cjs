@@ -1661,7 +1661,7 @@ app.get("/api/devices", requireSupabaseAuth, async (req, res) => {
     const devices =
       Array.isArray(rows)
         ? rows.map(row => ({
-            deviceId: row.device_id,
+            deviceId: row.device_id, role: memberships.find(item => item.device_id === row.device_id)?.role ?? null,
             deviceName:
               row.name || row.device_id,
             firmware:
