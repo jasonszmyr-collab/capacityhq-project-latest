@@ -1,3 +1,4 @@
+import { supabase } from "../services/supabaseClient";
 import { useCommandDelivery } from "../hooks/useCommandDelivery";
 import { getPoleCloudStatus, getFirmwareDisplay } from "../services/connectionPresentation";
 import { getPositionPresentation } from "./positionPresentation";
@@ -289,10 +290,17 @@ export default function CloudDeviceControl()
         }
     }
 
-    function handleLogout()
+    async function handleLogout()
     {
-        cloudService.clearAuth();
-        window.location.reload();
+        cancelCommandTracking();
+        try {
+            const { error } = await supabase.auth.signOut({ scope: "local" });
+            if (error) throw error;
+            cloudService.clearAuthentication();
+            localStorage.removeItem("demoMode");
+        } catch {
+            setError("Unable to sign out. Please try again.");
+        }
     }
 
     const controlsDisabled =
