@@ -420,8 +420,8 @@ export default function CloudDeviceControl()
                 )}
 
                 {success && (
-                    <Alert className="bg-green-50 border-green-200">
-                        <AlertDescription className="text-green-800">
+                    <Alert className="bg-amber-50 border-amber-200">
+                        <AlertDescription className="text-amber-900">
                             {success}
                         </AlertDescription>
                     </Alert>
