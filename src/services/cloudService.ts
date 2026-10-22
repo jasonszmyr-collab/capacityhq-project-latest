@@ -28,8 +28,10 @@ import type { DeviceTelemetry } from "../types/telemetry";
 import { DefaultTelemetry } from "../types/telemetry";
 
 import { discovery } from "./deviceDiscovery";
+import { requireLocalIdentity, LocalIdentityError } from "./localDeviceIdentity";
 import { CapacitorHttp } from "@capacitor/core";
 import { Preferences } from "@capacitor/preferences";
+import { commandReply, commandFailure, CommandHttpError, type CommandDispatchResult } from "./commandResponse";
 
 //======================================================================
 // Configuration
@@ -291,6 +293,12 @@ class CloudService
     private refreshToken: string | null = null;
 
     private userId: string | null = null;
+    private authRevision = 0;
+    private connectionRequested = false;
+    private authBlocked = false;
+    private sessionRecovery: (() => Promise<boolean>) | null = null;
+    private recoveryPending: Promise<boolean> | null = null;
+    private transportStartTimer: number | null = null;
 
     //--------------------------------------------------
     // Device
@@ -311,7 +319,7 @@ private telemetryTimer: number | null = null;
 private reconnectDelay = RECONNECT_DELAY;
 
 // Telemetry field
-private telemetry: DeviceTelemetry = DefaultTelemetry;
+private telemetry: DeviceTelemetry = structuredClone(DefaultTelemetry);
 
 //--------------------------------------------------
 // Connection State
@@ -322,6 +330,7 @@ private connected = false;
 private localConnected = false;
 
 private localIP: string | null = null;
+private selectionRevision = 0;
 
 private connectionMode: ConnectionMode = "offline";
 
@@ -333,6 +342,10 @@ private startTelemetryPolling(): void
     const poll =
         async () =>
         {
+            if (!this.authToken || !this.userId || this.authBlocked || !this.connectionRequested) return;
+            const selectedId = this.currentDeviceId;
+            const revision = this.selectionRevision;
+            const authRevision = this.authRevision;
             try
             {
                 //--------------------------------------------------
@@ -364,6 +377,8 @@ if (!deviceId)
 const telemetry =
     await this.getDeviceStatus(deviceId);
 
+                this.requireSelection(selectedId, revision);
+                if (authRevision !== this.authRevision || !this.connectionRequested) return;
                 this.updateTelemetry(telemetry);
 
                 this.connected = telemetry.online === true;
@@ -379,6 +394,8 @@ const telemetry =
             }
             catch (error)
             {
+                if (selectedId !== this.currentDeviceId || revision !== this.selectionRevision ||
+                    authRevision !== this.authRevision || !this.connectionRequested || this.authBlocked) return;
                 console.warn(
                     "[Telemetry] Cloud poll failed",
                     error
@@ -439,6 +456,7 @@ private stopTelemetryPolling(): void
     private commandQueue: CloudCommand[] = [];
 
     private processingQueue = false;
+    private commandReplayPaused = false;
 
     //--------------------------------------------------
     // Constructor
@@ -446,6 +464,8 @@ private stopTelemetryPolling(): void
 
     constructor()
     {
+        this.selectionRevision++;
+        this.clearLocalConnection();
         this.authToken = null;
 
         this.refreshToken =
@@ -492,73 +512,123 @@ console.log("Ready.");
 
     //------------------------------------------------------
 
+    public setSessionRecoveryHandler(handler: (() => Promise<boolean>) | null): void
+    {
+        this.sessionRecovery = handler;
+    }
+
+    // Apply identity and token together so another account cannot inherit a pole.
+    public setAuthentication(token: string, userId: string): void
+    {
+        if (!token || !userId) { this.clearAuthentication(); return; }
+        if (this.userId && this.userId !== userId) this.clearAuthentication();
+        const changed = this.authToken !== token || this.userId !== userId;
+        this.authToken = token;
+        this.userId = userId;
+        localStorage.setItem("cloud_auth_token", token);
+        localStorage.setItem("cloud_user_id", userId);
+        if (!changed) return;
+        this.authRevision++;
+        this.authBlocked = false;
+        this.stopCloudTransport();
+        this.resumeCloudTransport();
+    }
+
     public setAuthToken(token: string): void
     {
-        this.authToken = token;
-
-        localStorage.setItem(
-            "cloud_auth_token",
-            token
-        );
+        if (this.userId) this.setAuthentication(token, this.userId);
+        else { this.authToken = token; localStorage.setItem("cloud_auth_token", token); }
     }
 
-    //------------------------------------------------------
-
-    public getRefreshToken(): string |null
-    {
-        return this.refreshToken;
-    }
-
-    //------------------------------------------------------
-
+    public getRefreshToken(): string | null { return this.refreshToken; }
     public setRefreshToken(token: string): void
     {
         this.refreshToken = token;
-
-        localStorage.setItem(
-            "cloud_refresh_token",
-            token
-        );
+        localStorage.setItem("cloud_refresh_token", token);
     }
-
-    //------------------------------------------------------
-
-    public getUserId(): string | null
-    {
-        return this.userId;
-    }
-
-    //------------------------------------------------------
-
+    public getUserId(): string | null { return this.userId; }
     public setUserId(userId: string): void
     {
-        this.userId = userId;
-
-        localStorage.setItem(
-            "cloud_user_id",
-            userId
-        );
+        if (this.authToken) this.setAuthentication(this.authToken, userId);
+        else { this.userId = userId; localStorage.setItem("cloud_user_id", userId); }
     }
-
-    //------------------------------------------------------
 
     public clearAuthentication(): void
     {
+        this.authRevision++;
         this.authToken = null;
         this.refreshToken = null;
         this.userId = null;
+        this.connectionRequested = false;
+        this.authBlocked = false;
+        this.recoveryPending = null;
+        this.disconnect();
+        this.clearCurrentDevice();
+        this.devices.clear();
+        this.commandQueue = [];
+        this.commandReplayPaused = true;
+        this.telemetry = structuredClone(DefaultTelemetry);
+        for (const key of ["cloud_auth_token", "cloud_refresh_token", "cloud_user_id",
+            "honorpole_selected_device_id"]) localStorage.removeItem(key);
+        this.notifyTelemetrySubscribers();
+    }
 
-        localStorage.removeItem(
-            "cloud_auth_token"
-        );
+    private stopCloudTransport(): void
+    {
+        if (this.transportStartTimer !== null) clearTimeout(this.transportStartTimer);
+        this.transportStartTimer = null;
+        this.stopTelemetryPolling();
+        if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+        this.stopWebSocket();
+        this.connected = false;
+        this.connectionMode = "offline";
+        this.telemetry.online = false;
+        this.telemetry.network.websocketConnected = false;
+        this.notifyConnectionSubscribers(false);
+        this.notifyTelemetrySubscribers();
+    }
 
-        localStorage.removeItem(
-            "cloud_refresh_token"
-        );
+    private resumeCloudTransport(): void
+    {
+        if (!this.connectionRequested || !this.isAuthenticated() ||
+            !this.currentDeviceId || this.authBlocked) return;
+        if (this.transportStartTimer !== null) clearTimeout(this.transportStartTimer);
+        // Run after Supabase's synchronous auth callback has returned.
+        this.transportStartTimer = window.setTimeout(() => {
+            this.transportStartTimer = null;
+            if (!this.connectionRequested || !this.isAuthenticated() ||
+                !this.currentDeviceId || this.authBlocked) return;
+            this.startWebSocket();
+            this.startTelemetryPolling();
+            // Token renewal never replays pending movement commands.
+        }, 0);
+    }
 
-        localStorage.removeItem(
-            "cloud_user_id"
-        );
+    private async recoverAuthentication(failedToken: string, revision: number): Promise<boolean>
+    {
+        if (revision !== this.authRevision) return this.isAuthenticated() && !this.authBlocked;
+        if (this.recoveryPending) return this.recoveryPending;
+        const userId = this.userId;
+        this.authBlocked = true;
+        this.stopCloudTransport();
+        const pending = (async () => {
+            let recovered = false;
+            try { recovered = await this.sessionRecovery?.() === true; } catch { /* Stay paused. */ }
+            // Ignore completions after sign-out or an account switch.
+            if (!this.authToken || this.userId !== userId) return false;
+            if (revision !== this.authRevision) return !this.authBlocked;
+            if (recovered && this.authToken !== failedToken) {
+                this.authBlocked = false;
+                this.resumeCloudTransport();
+                return true;
+            }
+            this.notifyEventSubscribers("Cloud login needs attention. Sign out and sign in again.");
+            return false;
+        })();
+        this.recoveryPending = pending;
+        try { return await pending; }
+        finally { if (this.recoveryPending === pending) this.recoveryPending = null; }
     }
 
     //------------------------------------------------------
@@ -576,9 +646,15 @@ console.log("Ready.");
 
     private async request<T>(
         endpoint: string,
-        options: RequestInit = {}
+        options: RequestInit = {},
+        allowAuthRetry = true
     ): Promise<T>
     {
+        if (!this.isAuthenticated() || this.authBlocked) {
+            throw new CommandHttpError(401, {error: "Sign in to use cloud control."}, "");
+        }
+        const token = this.authToken!;
+        const revision = this.authRevision;
         const headers: Record<string,string> =
         {
             "Content-Type":
@@ -623,12 +699,32 @@ console.log("Ready.");
                 const text =
                     await response.text();
 
-                throw new Error(
-                    `${response.status} ${text}`
-                );
+                let body: unknown = null;
+                try { body = JSON.parse(text); } catch { /* Non-JSON error body. */ }
+                if (response.status === 401 && revision === this.authRevision) {
+                    if (allowAuthRetry) {
+                        const recovery = this.recoverAuthentication(token, revision);
+                        const method = (options.method || "GET").toUpperCase();
+                        if (method === "GET" || method === "HEAD") {
+                            if (await recovery && this.userId && this.authToken) {
+                                return this.request<T>(endpoint, options, false);
+                            }
+                        } else {
+                            void recovery; // The refused write is never resubmitted.
+                        }
+                    } else {
+                        this.authBlocked = true;
+                        this.stopCloudTransport();
+                    }
+                }
+                throw new CommandHttpError(response.status, body, text);
             }
 
-            return await response.json();
+            const result = await response.json();
+            if (revision !== this.authRevision || !this.isAuthenticated()) {
+                throw new CommandHttpError(401, {error: "Login changed while reading cloud data."}, "");
+            }
+            return result;
         }
 
         finally
@@ -672,6 +768,7 @@ console.log("Ready.");
 
     if (deviceChanged)
     {
+        this.selectionRevision++;
         // A LAN address belongs to one physical pole only. Never carry
         // the previous pole's local connection across a selection change.
         this.localConnected = false;
@@ -687,18 +784,8 @@ console.log("Ready.");
 
         this.notifyTelemetrySubscribers();
 
-        if (
-            this.socket &&
-            this.socket.readyState === WebSocket.OPEN
-        )
-        {
-            this.socket.send(
-                JSON.stringify({
-                    type: "subscribe",
-                    deviceId: device.deviceId
-                })
-            );
-        }
+        this.stopCloudTransport();
+        this.resumeCloudTransport();
     }
 }
 
@@ -722,10 +809,12 @@ console.log("Ready.");
 
     public clearCurrentDevice(): void
     {
+        this.selectionRevision++;
         this.currentDevice = null;
         this.currentDeviceId = null;
         this.localConnected = false;
         this.localIP = null;
+        this.stopCloudTransport();
     }
 
     //------------------------------------------------------
@@ -961,9 +1050,10 @@ console.log("Ready.");
     //------------------------------------------------------
 
     public setLocalConnection(
-        ip: string
+        ip: string, deviceId: string
     ): void
     {
+        if (deviceId !== this.currentDeviceId) throw new LocalIdentityError("Selected HonorPole changed. Retry for the current device.");
         this.localConnected = true;
         this.localIP = ip;
         this.connectionMode = "local";
@@ -1017,206 +1107,119 @@ console.log("Ready.");
 
     //------------------------------------------------------
 
-    public async sendCommand(
-        value1: string,
-        value2?: CommandType
-    ): Promise<boolean>
+    public async sendCommand(value1: string, value2?: CommandType): Promise<boolean>
     {
-        let deviceId: string | null = null;
-        let command: CommandType;
-
-        //--------------------------------------------------
-        // Determine overload
-        //--------------------------------------------------
-
-        if (value2 === undefined)
-        {
-            command = value1 as CommandType;
-            deviceId = this.currentDeviceId;
-        }
-        else
-        {
-            deviceId = value1;
-            command = value2;
-        }
-
-        //--------------------------------------------------
-        // Validate
-        //--------------------------------------------------
-
-        if (!deviceId)
-        {
-            console.error(
-                "[Cloud] No device selected."
-            );
-
-            return false;
-        }
-
-        //--------------------------------------------------
-        // Emergency STOP - Load Saved Local IP
-        //--------------------------------------------------
-
-        if (
-            command === "stop" &&
-            deviceId === this.currentDeviceId &&
-            (!this.localConnected || !this.localIP)
-        )
-        {
-            const saved = await Preferences.get({
-                key: this.getLocalIpPreferenceKey(
-                    deviceId
-                )
-            });
-
-            if (saved.value)
-            {
-                this.localIP =
-                    saved.value.replace("http://", "");
-
-                this.localConnected = true;
-
-                console.log(
-                    "[STOP] Loaded saved local IP:",
-                    this.localIP
-                );
-            }
-        }
-        //--------------------------------------------------
-        // Local Preferred
-        //--------------------------------------------------
-
-        if (
-            deviceId === this.currentDeviceId &&
-            this.localConnected &&
-            this.localIP
-        )
-        {
-            if (command === "stop")
-            {
-                // Emergency STOP must not wait for a stale or unreachable
-                // LAN address before the cloud request is sent.
-                void this.sendLocalCommand(command)
-                    .then(ok =>
-                    {
-                        if (ok)
-                        {
-                            console.log(
-                                "[STOP] Local STOP delivered."
-                            );
-                        }
-                    });
-
-                console.log(
-                    "[STOP] Local and cloud STOP dispatched in parallel."
-                );
-            }
-            else
-            {
-                try
-                {
-                    const ok =
-                        await this.sendLocalCommand(
-                            command
-                        );
-
-                    if (ok)
-                    {
-                        return true;
-                    }
-                }
-                catch (error)
-                {
-                    console.warn(
-                        "[Cloud] Local command failed.",
-                        error
-                    );
-                }
-            }
-        }
-        //--------------------------------------------------
-        // Cloud Fallback
-        //--------------------------------------------------
-
-        try
-        {
-            await this.request(
-                `/api/device/${deviceId}/command`,
-                {
-                    method: "POST",
-
-                    body: JSON.stringify({
-                        command
-                    })
-                }
-            );
-
-            return true;
-        }
-        catch (error)
-        {
-            console.error(
-                "[Cloud] Cloud command failed.",
-                error
-            );
-
-            return false;
-        }
+        // Legacy callers receive submission status, never proof of motion.
+        return (await this.sendCommandResult(value1, value2)).success;
     }
 
-    //------------------------------------------------------
-    // Local REST Command
-    //------------------------------------------------------
-
-    private async sendLocalCommand(
-        command: CommandType
-    ): Promise<boolean>
+    public async sendCommandResult(
+        value1: string, value2?: CommandType
+    ): Promise<CommandDispatchResult>
     {
-        if (!this.localIP)
-        {
-            return false;
+        const deviceId = value2 === undefined ? this.currentDeviceId : value1;
+        const command = value2 === undefined ? value1 as CommandType : value2;
+        if (!deviceId) {
+            return { success: false, stage: "rejected", message: "Select an HonorPole before sending a command." };
         }
 
-        try
-        {
-            const response =
-                await CapacitorHttp.request({
-                    method: "POST",
-                    url: `http://${this.localIP}/api/command`,
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    data: {
-                        command
-                    },
-                    connectTimeout: 1000,
-                    readTimeout: 1000
+        if (command === "stop" && deviceId === this.currentDeviceId &&
+            (!this.localConnected || !this.localIP)) {
+            try {
+                const saved = await Preferences.get({ key: this.getLocalIpPreferenceKey(deviceId) });
+                if (saved.value && deviceId === this.currentDeviceId) {
+                    this.localIP = saved.value.replace("http://", "");
+                    this.localConnected = true;
+                }
+            } catch {
+                // A preferences failure must not block the cloud STOP.
+            }
+        }
+
+        const useLocal = deviceId === this.currentDeviceId && this.localConnected && this.localIP;
+        if (command === "stop" && useLocal) {
+            // Start BOTH routes before awaiting either. A stale LAN IP cannot delay cloud STOP.
+            const local = this.sendLocalCommandResult(deviceId, command);
+            const cloud = this.sendCloudCommandResult(deviceId, command);
+            return new Promise<CommandDispatchResult>(resolve => {
+                let failedRoutes = 0;
+                let localResult: CommandDispatchResult | null = null;
+                let cloudResult: CommandDispatchResult | null = null;
+                const finish = () => {
+                    if (++failedRoutes !== 2 || !cloudResult) return;
+                    resolve(localResult?.stage === "rejected" && cloudResult.stage === "rejected"
+                        ? { ...cloudResult, message: `STOP rejected. Cloud: ${cloudResult.message} Local: ${localResult.message}` }
+                        : cloudResult);
+                };
+                void local.then(result => {
+                    localResult = result;
+                    if (result?.success) resolve(result); else finish();
                 });
-
-            if (
-                response.status < 200 ||
-                response.status >= 300
-            )
-            {
-                return false;
-            }
-
-            console.log(
-                `[LOCAL] ${command}`
-            );
-
-            return true;
+                void cloud.then(result => {
+                    cloudResult = result;
+                    if (result.success) resolve(result); else finish();
+                });
+            });
         }
-        catch (error)
-        {
-            console.warn(
-                `[LOCAL] ${command} failed.`,
-                error
-            );
 
-            return false;
+        if (useLocal) {
+            const localResult = await this.sendLocalCommandResult(deviceId, command);
+            // A definitive local refusal or ambiguous success must NOT be resubmitted in the cloud.
+            if (localResult) return localResult;
+        }
+        return this.sendCloudCommandResult(deviceId, command);
+    }
+
+    public async getCommandDeliveryStatus(deviceId: string): Promise<unknown>
+    {
+        if (!/^HP-[0-9]{3,6}$/.test(deviceId)) throw new Error("Invalid HonorPole ID.");
+        return this.request<unknown>(`/api/device/${encodeURIComponent(deviceId)}/status`);
+    }
+
+    private async sendCloudCommandResult(
+        deviceId: string, command: CommandType
+    ): Promise<CommandDispatchResult>
+    {
+        try {
+            const payload = await this.request<unknown>(
+                `/api/device/${encodeURIComponent(deviceId)}/command`,
+                { method: "POST", body: JSON.stringify({ command }) }
+            );
+            return commandReply(payload, "cloud", deviceId, command);
+        } catch (error) {
+            return commandFailure(error, command);
         }
     }
+
+    private async sendLocalCommandResult(
+        deviceId: string, command: CommandType
+    ): Promise<CommandDispatchResult | null>
+    {
+        const localIP = this.localIP;
+        if (!localIP) return null;
+        const revision = this.selectionRevision;
+        try {
+            await this.checkedLocalStatus(localIP, deviceId, revision);
+            this.requireSelection(deviceId, revision);
+            const response = await CapacitorHttp.request({
+                method: "POST", url: `http://${localIP}/api/command`,
+                headers: { "Content-Type": "application/json" },
+                data: { command }, connectTimeout: 1000, readTimeout: 1000
+            });
+            // Unsupported local endpoint: preserve the existing cloud fallback.
+            if (response.status === 404 || response.status === 405) return null;
+            if (response.status < 200 || response.status >= 300) {
+                return commandFailure(new CommandHttpError(response.status, response.data, ""), command);
+            }
+            return commandReply(response.data, "local", deviceId, command);
+        } catch (error) {
+            if (error instanceof LocalIdentityError) return { success: false, stage: "rejected", message: error.message };
+            // Preserve transport fallback. A lost local response can still mean execution;
+            // neither route is described as accepted or completed.
+            return null;
+        }
+    }
+
     //------------------------------------------------------
     // Convenience Commands
     //------------------------------------------------------
@@ -1272,10 +1275,13 @@ console.log("Ready.");
 
     public async discoverDevice(): Promise<boolean>
     {
+        const deviceId = this.currentDeviceId;
+        const revision = this.selectionRevision;
+        if (!deviceId) return false;
         try
         {
             const found =
-                await discovery.discover();
+                await discovery.discover(deviceId);
 
             if (!found)
             {
@@ -1286,7 +1292,9 @@ console.log("Ready.");
                 return false;
             }
 
-            this.setLocalConnection(found.ip);
+            this.requireSelection(deviceId, revision);
+            requireLocalIdentity(found, deviceId);
+            this.setLocalConnection(found.ip, deviceId);
 
             this.telemetry.network.ipAddress =
                 found.ip;
@@ -1325,72 +1333,14 @@ console.log("Ready.");
     // Connect
     //------------------------------------------------------
 
-   public async connect(): Promise<boolean>
-{
-    //--------------------------------------------------
-    // Already Connected
-    //--------------------------------------------------
-
-    if (this.connected)
+    public async connect(): Promise<boolean>
     {
-        return true;
+        if (!this.isAuthenticated() || !this.currentDeviceId || this.authBlocked) return false;
+        if (this.connectionRequested) return this.connected;
+        this.connectionRequested = true;
+        this.resumeCloudTransport();
+        return false; // A request to connect is not confirmation of device connectivity.
     }
-
-    //--------------------------------------------------
-    // Normal Dashboard Connection
-    //
-    // Do NOT perform LAN discovery here.
-    // The normal application communicates through
-    // the cloud/Render service.
-    //
-    // discoverDevice() remains available separately
-    // for setup and provisioning.
-    //--------------------------------------------------
-
-    console.log(
-        "[Cloud] Starting cloud connection."
-    );
-
-    //--------------------------------------------------
-    // Start WebSocket
-    //--------------------------------------------------
-
-    this.startWebSocket();
-
-    //--------------------------------------------------
-    // Enable Cloud Connection
-    //--------------------------------------------------
-
-    this.connected = true;
-
-    this.connectionMode = "cloud";
-
-    //--------------------------------------------------
-    // Start Cloud Telemetry Polling
-    //--------------------------------------------------
-
-    this.startTelemetryPolling();
-
-    //--------------------------------------------------
-    // Process Pending Commands
-    //--------------------------------------------------
-
-    await this.processQueue();
-
-    //--------------------------------------------------
-    // Notify UI
-    //--------------------------------------------------
-
-    this.notifyConnectionSubscribers(
-        true
-    );
-
-    console.log(
-        "[Cloud] Cloud connection started."
-    );
-
-    return true;
-}
 
     //------------------------------------------------------
     // Disconnect
@@ -1398,47 +1348,10 @@ console.log("Ready.");
 
     public disconnect(): void
     {
-        this.connected = false;
-
+        this.connectionRequested = false;
         this.localConnected = false;
-
-        this.connectionMode =
-            "offline";
-
-        if (this.socket)
-        {
-            this.socket.close();
-
-            this.socket = null;
-        }
-
-        if (this.heartbeatTimer)
-        {
-            clearInterval(
-                this.heartbeatTimer
-            );
-
-            this.heartbeatTimer = null;
-        }
-
-        if (this.reconnectTimer)
-        {
-            clearTimeout(
-                this.reconnectTimer
-            );
-
-            this.reconnectTimer = null;
-        }
-
-        this.telemetry.network.websocketConnected = false;
-
-this.notifyConnectionSubscribers(false);
-
-this.stopTelemetryPolling();
-
-console.log(
-    "[Cloud] Disconnected"
-);
+        this.localIP = null;
+        this.stopCloudTransport();
     }
 
     //------------------------------------------------------
@@ -1448,26 +1361,13 @@ console.log(
     public async refreshStatus():
         Promise<void>
     {
-        if (!this.localIP)
-        {
-            return;
-        }
-
+        const deviceId = this.currentDeviceId;
+        const revision = this.selectionRevision;
+        if (!this.localIP || !deviceId) return;
         try
         {
-            const response =
-                await fetch(
-                    `http://${this.localIP}/status`
-                );
-
-            if (!response.ok)
-            {
-                return;
-            }
-
-            const status =
-                await response.json();
-
+            const status = await this.localRequest<any>("/status");
+            this.requireSelection(deviceId, revision);
             this.telemetry.online = true;
 
             this.telemetry.network.wifiConnected =
@@ -1520,6 +1420,7 @@ this.notifyTelemetrySubscribers();
         }
         catch
         {
+            if (deviceId !== this.currentDeviceId || revision !== this.selectionRevision) return;
             this.telemetry.online = false;
 
             this.notifyTelemetrySubscribers();
@@ -1533,34 +1434,9 @@ this.notifyTelemetrySubscribers();
     public async ping():
         Promise<boolean>
     {
-        if (!this.localIP)
-        {
-            return false;
-        }
-
-        try
-        {
-            const response =
-                await fetch(
-                    `http://${this.localIP}/status`
-                );
-
-            return response.ok;
-        }
-        catch
-        {
-            return false;
-        }
+        try { await this.localRequest("/status"); return true; }
+        catch { return false; }
     }
-
-        //======================================================
-    // Subscribers
-    //======================================================
-
-    //------------------------------------------------------
-    // Telemetry
-    //------------------------------------------------------
-
     public subscribeTelemetry(
         callback: TelemetrySubscriber
     ): () => void
@@ -1758,162 +1634,75 @@ this.notifyTelemetrySubscribers();
 
     private startWebSocket(): void
     {
-        if (this.socket)
-        {
-            this.socket.close();
-            this.socket = null;
-        }
-
-        if (!this.authToken)
-        {
-            console.warn(
-                "[Cloud] Cannot start WebSocket without authentication."
-            );
-
-            return;
-        }
-
-        try
-        {
-            const deviceQuery =
-                this.currentDeviceId
-                    ? `&deviceId=${encodeURIComponent(this.currentDeviceId)}`
-                    : "";
-
-            const url =
-                `${WS_ENDPOINT}?token=${encodeURIComponent(this.authToken)}${deviceQuery}`;
-
-            console.log(
-                "[Cloud] Opening authenticated WebSocket"
-            );
-
-            this.socket = new WebSocket(url);
-
-            this.socket.onopen =
-                () =>
-                {
-                    console.log(
-                        "[Cloud] WebSocket Connected"
-                    );
-
-                    this.connected = true;
-
-                    this.connectionMode =
-                        "cloud";
-
-                    this.reconnectDelay =
-                        RECONNECT_DELAY;
-
-                    this.telemetry.network.websocketConnected =
-                        true;
-
-                    this.notifyConnectionSubscribers(
-                        true
-                    );
-
-                    this.notifyTelemetrySubscribers();
-
-                    this.startHeartbeat();
-                };
-
-            this.socket.onmessage =
-                (event) =>
-                {
-                    this.handleSocketMessage(
-                        event.data
-                    );
-                };
-
-            this.socket.onerror =
-                (event) =>
-                {
-                    console.error(
-                        "[Cloud] WebSocket Error",
-                        event
-                    );
-                };
-
-            this.socket.onclose =
-                () =>
-                {
-                    console.warn(
-                        "[Cloud] WebSocket Closed"
-                    );
-
-                    this.connected = false;
-
-                    this.telemetry.network.websocketConnected =
-                        false;
-
-                    this.notifyConnectionSubscribers(
-                        false
-                    );
-
-                    this.notifyTelemetrySubscribers();
-
-                    this.stopHeartbeat();
-
-                    this.scheduleReconnect();
-                };
-        }
-        catch (error)
-        {
-            console.error(
-                "[Cloud] WebSocket Exception",
-                error
-            );
-
+        this.stopWebSocket();
+        if (!this.connectionRequested || !this.isAuthenticated() ||
+            !this.currentDeviceId || this.authBlocked) return;
+        const token = this.authToken!;
+        const revision = this.authRevision;
+        const deviceId = this.currentDeviceId;
+        try {
+            const socket = new WebSocket(`${WS_ENDPOINT}?token=${encodeURIComponent(token)}` +
+                `&deviceId=${encodeURIComponent(deviceId)}`);
+            this.socket = socket;
+            const current = () => this.socket === socket && this.connectionRequested &&
+                revision === this.authRevision && deviceId === this.currentDeviceId && !this.authBlocked;
+            socket.onopen = () => {
+                if (!current()) return;
+                this.reconnectDelay = RECONNECT_DELAY;
+                this.telemetry.network.websocketConnected = true;
+                this.notifyTelemetrySubscribers();
+                this.startHeartbeat();
+                // Telemetry determines device Online; socket OPEN alone does not.
+            };
+            socket.onmessage = event => {
+                if (current()) this.handleSocketMessage(event.data);
+            };
+            socket.onerror = () => {
+                if (current()) console.warn("[Cloud] WebSocket transport unavailable.");
+            };
+            socket.onclose = event => {
+                if (!current()) return;
+                this.socket = null;
+                this.telemetry.network.websocketConnected = false;
+                this.stopHeartbeat();
+                this.connected = false;
+                this.connectionMode = "offline";
+                this.notifyConnectionSubscribers(false);
+                this.notifyTelemetrySubscribers();
+                // 1008 can also mean revoked membership. Never renew/replay commands here.
+                // The authenticated status read supplies the HTTP 401 vs 403 distinction.
+                this.scheduleReconnect(event.code === 1008 ? 10000 : undefined);
+            };
+        } catch {
+            console.warn("[Cloud] WebSocket could not start.");
             this.scheduleReconnect();
         }
     }
 
-    //------------------------------------------------------
-    // Stop WebSocket
-    //------------------------------------------------------
-
     private stopWebSocket(): void
     {
         this.stopHeartbeat();
-
-        if (this.socket)
-        {
-            this.socket.close();
-
-            this.socket = null;
+        const socket = this.socket;
+        this.socket = null;
+        if (socket) {
+            socket.onopen = null;
+            socket.onmessage = null;
+            socket.onerror = null;
+            socket.onclose = null;
+            socket.close();
         }
     }
 
-    //------------------------------------------------------
-    // Reconnect
-    //------------------------------------------------------
-
-    private scheduleReconnect(): void
+    private scheduleReconnect(delay?: number): void
     {
-        if (this.reconnectTimer)
-        {
-            clearTimeout(
-                this.reconnectTimer
-            );
-        }
-
-        this.reconnectTimer =
-            window.setTimeout(
-                () =>
-                {
-                    console.log(
-                        "[Cloud] Reconnecting..."
-                    );
-
-                    this.startWebSocket();
-                },
-                this.reconnectDelay
-            );
-
-        this.reconnectDelay =
-            Math.min(
-                this.reconnectDelay * 2,
-                MAX_RECONNECT_DELAY
-            );
+        if (!this.connectionRequested || !this.isAuthenticated() ||
+            !this.currentDeviceId || this.authBlocked) return;
+        if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = window.setTimeout(() => {
+            this.reconnectTimer = null;
+            this.startWebSocket();
+        }, delay ?? this.reconnectDelay);
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, MAX_RECONNECT_DELAY);
     }
 
     //------------------------------------------------------
@@ -1984,9 +1773,9 @@ this.notifyTelemetrySubscribers();
                 : null;
 
     if (
-        this.currentDeviceId &&
-        messageDeviceId &&
-        messageDeviceId !== this.currentDeviceId
+        !this.currentDeviceId ||
+        messageDeviceId !== this.currentDeviceId ||
+        (typeof message.data?.deviceId === "string" && message.data.deviceId !== this.currentDeviceId)
     )
     {
         break;
@@ -1998,6 +1787,9 @@ this.notifyTelemetrySubscribers();
         ...message.data
     };
 
+    this.connected = this.telemetry.online === true;
+    this.connectionMode = this.connected ? "cloud" : "offline";
+    this.notifyConnectionSubscribers(this.connected);
     this.notifyTelemetrySubscribers();
 
     break;
@@ -2044,127 +1836,55 @@ this.notifyTelemetrySubscribers();
 
     public async resetDeviceWiFi(): Promise<void>
     {
-        if (!this.currentDeviceId)
-        {
-            throw new Error("No HonorPole selected.");
-        }
-
+        const deviceId = this.currentDeviceId;
+        const revision = this.selectionRevision;
+        if (!deviceId) throw new LocalIdentityError("No HonorPole selected.");
         let deviceIP = this.localIP;
-
-        if (!deviceIP)
-        {
-            const saved = await Preferences.get({
-                key: this.getLocalIpPreferenceKey(
-                    this.currentDeviceId
-                )
-            });
-
-            deviceIP =
-                saved.value?.replace(
-                    /^https?:\/\//,
-                    ""
-                ) ?? null;
+        if (!deviceIP) {
+            const saved = await Preferences.get({ key: this.getLocalIpPreferenceKey(deviceId) });
+            deviceIP = saved.value?.replace(/^https?:\/\//, "") ?? null;
         }
-
-        if (!deviceIP)
-        {
-            try
-            {
-                const status =
-                    await this.getDeviceStatus(
-                        this.currentDeviceId
-                    );
-
-                const statusIP =
-                    status.network?.ipAddress;
-
-                if (
-                    statusIP &&
-                    statusIP !== "--"
-                )
-                {
-                    deviceIP =
-                        statusIP.replace(
-                            /^https?:\/\//,
-                            ""
-                        );
-                }
-            }
-            catch (error)
-            {
-                console.warn(
-                    "[WiFi Reset] Cloud IP lookup failed.",
-                    error
-                );
-            }
+        if (!deviceIP) {
+            try {
+                const status = await this.getDeviceStatus(deviceId);
+                const ip = status.network?.ipAddress;
+                if (ip && ip !== "--") deviceIP = ip.replace(/^https?:\/\//, "");
+            } catch { /* A failed cloud read does not authorize a local write. */ }
         }
-
-        if (!deviceIP)
-        {
-            try
-            {
-                const discovered =
-                    await discovery.discover();
-
-                if (discovered?.ip)
-                {
-                    deviceIP =
-                        discovered.ip.replace(
-                            /^https?:\/\//,
-                            ""
-                        );
-                }
-            }
-            catch (error)
-            {
-                console.warn(
-                    "[WiFi Reset] Local discovery failed.",
-                    error
-                );
-            }
-        }
-
-        if (!deviceIP)
-        {
-            throw new Error(
-                "HonorPole could not be found on the local WiFi network."
-            );
-        }
-
-        const response =
-            await CapacitorHttp.request({
-                method: "POST",
-                url: `http://${deviceIP}/resetwifi`,
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                connectTimeout: 3000,
-                readTimeout: 3000
-            });
-
-        if (
-            response.status < 200 ||
-            response.status >= 300
-        )
-        {
-            throw new Error(
-                `HonorPole rejected the WiFi reset (${response.status}).`
-            );
-        }
-
-        await Preferences.remove({
-            key: this.getLocalIpPreferenceKey(
-                this.currentDeviceId
-            )
+        this.requireSelection(deviceId, revision);
+        if (!deviceIP) deviceIP = (await discovery.discover(deviceId))?.ip ?? null;
+        if (!deviceIP) throw new Error("Selected HonorPole could not be found on the local WiFi network.");
+        await this.checkedLocalStatus(deviceIP, deviceId, revision);
+        this.requireSelection(deviceId, revision);
+        const response = await CapacitorHttp.request({
+            method: "POST", url: `http://${deviceIP}/resetwifi`,
+            headers: { "Content-Type": "application/json" },
+            connectTimeout: 3000, readTimeout: 3000
         });
+        if (response.status < 200 || response.status >= 300 || response.data?.success === false) {
+            throw new Error(`HonorPole rejected the WiFi reset (${response.status}).`);
+        }
+        await Preferences.remove({ key: this.getLocalIpPreferenceKey(deviceId) });
+        // A request already sent cannot be recalled; never clear a newly selected pole.
+        if (deviceId === this.currentDeviceId && revision === this.selectionRevision) {
+            this.clearLocalConnection();
+        }
+    }
 
-        this.localConnected = false;
-        this.localIP = null;
+    private requireSelection(deviceId: string | null, revision: number): void {
+        if (!deviceId || deviceId !== this.currentDeviceId || revision !== this.selectionRevision) {
+            throw new LocalIdentityError("Selected HonorPole changed. Retry for the current device.");
+        }
+    }
 
-        this.connectionMode =
-            this.connected
-                ? "cloud"
-                : "offline";
+    private async checkedLocalStatus(ip: string, deviceId: string | null, revision: number): Promise<any> {
+        this.requireSelection(deviceId, revision);
+        const response = await CapacitorHttp.request({
+            method: "GET", url: `http://${ip}/status`, connectTimeout: 1000, readTimeout: 1000
+        });
+        this.requireSelection(deviceId, revision);
+        if (response.status !== 200) throw new Error("Unable to read selected HonorPole identity.");
+        return requireLocalIdentity(response.data, deviceId);
     }
 
     //------------------------------------------------------
@@ -2180,6 +1900,13 @@ this.notifyTelemetrySubscribers();
             );
         }
 
+        const ip = this.localIP;
+        const deviceId = this.currentDeviceId;
+        const revision = this.selectionRevision;
+        const status = await this.checkedLocalStatus(ip, deviceId, revision);
+        this.requireSelection(deviceId, revision);
+        if (endpoint === "/status") return status as T;
+        if (this.localIP !== ip) throw new LocalIdentityError("Local connection changed. Retry for the current device.");
         const controller =
             new AbortController();
 
@@ -2193,7 +1920,7 @@ this.notifyTelemetrySubscribers();
         {
             const response =
                 await fetch(
-                    `http://${this.localIP}${endpoint}`,
+                    `http://${ip}${endpoint}`,
                     {
                         ...options,
                         signal: controller.signal,
@@ -2213,7 +1940,13 @@ this.notifyTelemetrySubscribers();
                 );
             }
 
-            return await response.json();
+            const result = await response.json();
+            this.requireSelection(deviceId, revision);
+            if ((options.method ?? "GET").toUpperCase() !== "GET" &&
+                (result?.success === false || result?.ok === false || result?.error)) {
+                throw new Error(typeof result.error === "string" ? result.error : "Local request was refused.");
+            }
+            return result;
         }
         finally
         {
@@ -2269,6 +2002,7 @@ this.notifyTelemetrySubscribers();
     public clearQueue(): void
     {
         this.commandQueue = [];
+        this.commandReplayPaused = false;
     }
 
     //------------------------------------------------------
@@ -2276,7 +2010,7 @@ this.notifyTelemetrySubscribers();
     public async processQueue():
         Promise<void>
     {
-        if (this.processingQueue)
+        if (this.processingQueue || this.commandReplayPaused)
         {
             return;
         }
@@ -2296,15 +2030,16 @@ this.notifyTelemetrySubscribers();
                 const item =
                     this.commandQueue[0];
 
-                const success =
-                    await this.sendCommand(
-                        item.deviceId,
-                        item.command
-                    );
-
-                if (!success)
-                {
-                    break;
+                const result = await this.sendCommandResult(item.deviceId, item.command);
+                if (!result.success) {
+                    item.status = "failed";
+                    this.commandQueue.shift();
+                    // Stop replay on uncertainty. Never automatically retry an ambiguous submission.
+                    if (result.stage === "unknown") {
+                        this.commandReplayPaused = true;
+                        break;
+                    }
+                    continue;
                 }
 
                 item.status =
@@ -2334,15 +2069,8 @@ this.notifyTelemetrySubscribers();
             this.localConnected
         )
         {
-            const ok =
-                await this.sendCommand(
-                    command
-                );
-
-            if (ok)
-            {
-                return true;
-            }
+            const result = await this.sendCommandResult(command);
+            return result.success;
         }
 
         await this.queueCommand(
@@ -2535,11 +2263,14 @@ this.notifyTelemetrySubscribers();
     public async getLocalStatus():
         Promise<DeviceTelemetry>
     {
+        const deviceId = this.currentDeviceId;
+        const revision = this.selectionRevision;
         const telemetry =
             await this.localRequest<DeviceTelemetry>(
                 "/status"
             );
 
+        this.requireSelection(deviceId, revision);
         this.telemetry =
         {
             ...this.telemetry,
@@ -2633,6 +2364,8 @@ this.notifyTelemetrySubscribers();
     public async resetWifi():
         Promise<boolean>
     {
+        const deviceId = this.currentDeviceId;
+        const revision = this.selectionRevision;
         await this.localRequest(
             "/resetwifi",
             {
@@ -2640,8 +2373,8 @@ this.notifyTelemetrySubscribers();
             }
         );
 
-        this.localConnected = false;
-        this.localIP = null;
+        this.requireSelection(deviceId, revision);
+        this.clearLocalConnection();
 
         return true;
     }

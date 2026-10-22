@@ -1,3 +1,5 @@
+import { useCommandDelivery } from "../hooks/useCommandDelivery";
+import { getPositionPresentation } from "./positionPresentation";
 /******************************************************************************
  *
  * HonorPole Mobile Application
@@ -50,6 +52,7 @@
  ******************************************************************************/
 
 import { useEffect, useMemo, useState } from "react";
+import { getPoleCloudStatus, getFirmwareDisplay } from "../services/connectionPresentation";
 import { Link } from "react-router-dom";
 
 import AppHeader from "./AppHeader";
@@ -316,37 +319,27 @@ function modeLabel(
 
 function LiveFlagVisualization({
     currentPosition,
+    targetPosition,
     learnedTopPosition,
     moving,
     movement,
-    online
+    online,
+    calibrated
 }: {
     currentPosition: number;
+    targetPosition: number;
     learnedTopPosition: number;
     moving: boolean;
     movement: string;
     online: boolean;
+    calibrated: boolean;
 })
 {
-    const safeTop =
-        Number.isFinite(learnedTopPosition) &&
-        learnedTopPosition > 0
-            ? learnedTopPosition
-            : 1;
-
-    const rawPercent =
-        (currentPosition / safeTop) * 100;
-
-    const percent =
-        Math.max(
-            0,
-            Math.min(
-                100,
-                Number.isFinite(rawPercent)
-                    ? rawPercent
-                    : 0
-            )
-        );
+    const presentation = getPositionPresentation({
+        currentPosition, targetPosition,
+        learnedTopPosition, movement, online, calibrated
+    });
+    const percent = presentation.percent ?? 0;
 
     const positionLabel =
         percent >= 98
@@ -404,8 +397,8 @@ function LiveFlagVisualization({
                     "
                 />
 
-                {/* Flag assembly - telemetry controls vertical position */}
-                <div
+                {/* Render height only while the step estimate is usable. */}
+                {presentation.canMove && <div
                     className="absolute left-1/2 transition-all duration-700 ease-out"
                     style={{
                         bottom: `calc(20px + ${percent * 0.72}%)`
@@ -451,6 +444,14 @@ function LiveFlagVisualization({
                     </div>
                 </div>
 
+                }
+                {!presentation.canMove && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/90 px-6 text-center text-white">
+                        <p className="text-xl font-semibold">Position unknown</p>
+                        <p className="mt-2 text-sm">{presentation.reason}</p>
+                    </div>
+                )}
+
                 {/* Position markers */}
                 <div className="absolute left-4 top-5 text-xs font-semibold text-gray-300">
                     FULL
@@ -477,17 +478,17 @@ function LiveFlagVisualization({
                         text-white
                     "
                 >
-                    {online ? "LIVE" : "OFFLINE"} - {positionLabel}
+                    {presentation.canMove ? `ESTIMATE - ${positionLabel}` : "POSITION UNKNOWN"}
                     {moving ? ` - ${movement}` : ""}
                 </div>
             </div>
 
             <div className="mt-3 flex items-center justify-between gap-4 text-sm">
                 <span className="text-gray-400">
-                    Live physical position
+                    Estimated position
                 </span>
                 <span className="font-semibold text-white">
-                    {Math.round(percent)}%
+                    {presentation.percent === null ? "Unknown" : `${presentation.percent}%`}
                 </span>
             </div>
         </div>
@@ -556,7 +557,7 @@ const HomePage = () =>
         useState(true);
 
     const [
-        connectionStatus,
+        ,
         setConnectionStatus
     ] =
         useState("Connecting...");
@@ -601,17 +602,18 @@ const HomePage = () =>
     ] =
         useState(false);
 
+    const [commandNotice, setCommandNotice] = useState<string | null>(null);
+    const [commandError, setCommandError] = useState<string | null>(null);
+    const { trackCommand, cancelCommandTracking } = useCommandDelivery(selectedDeviceId, setCommandNotice);
+    useEffect(() => { setCommandNotice(null); setCommandError(null); }, [selectedDeviceId]);
+
     //------------------------------------------------------------------
     // Connect to HonorPole
     //------------------------------------------------------------------
 
     useEffect(() =>
     {
-        if (!selectedDeviceId)
-        {
-            setDirectiveStatus(null);
-            return;
-        }
+        
 
         let mounted = true;
 
@@ -856,6 +858,12 @@ if (devices.length > 0)
 
     useEffect(() =>
     {
+        if (!selectedDeviceId)
+        {
+            setModeLoading(false);
+            setModeError(null);
+            return;
+        }
         let mounted = true;
 
         async function loadMode()
@@ -924,6 +932,8 @@ if (devices.length > 0)
     // Derived Display Values
     //------------------------------------------------------------------
 
+    const positionPresentation = getPositionPresentation(device);
+
     const currentPosition =
         useMemo(
             () =>
@@ -977,6 +987,12 @@ if (devices.length > 0)
             return;
         }
 
+        if (!positionPresentation.canMove)
+        {
+            setModeError(positionPresentation.reason);
+            return;
+        }
+
         try
         {
             setSendingCommand(
@@ -984,6 +1000,9 @@ if (devices.length > 0)
             );
 
             setModeError(null);
+            cancelCommandTracking();
+            setCommandNotice(null);
+            setCommandError(null);
 
             setConnectionStatus(
                 "Enabling Automatic Mode..."
@@ -1062,6 +1081,12 @@ if (devices.length > 0)
             return;
         }
 
+        if (!positionPresentation.canMove)
+        {
+            setModeError(positionPresentation.reason);
+            return;
+        }
+
         const persistentMode:
             HonorPoleOverrideMode =
                 command === "full"
@@ -1077,6 +1102,9 @@ if (devices.length > 0)
             );
 
             setModeError(null);
+            cancelCommandTracking();
+            setCommandNotice(null);
+            setCommandError(null);
 
             setConnectionStatus(
                 "Setting Manual Override..."
@@ -1116,25 +1144,21 @@ if (devices.length > 0)
                 `[HomePage] Sending ${command.toUpperCase()} to ${selectedDeviceId}`
             );
 
-            const success =
-                await cloudService.sendCommand(
+            const result =
+                await cloudService.sendCommandResult(
                     selectedDeviceId,
                     command
                 );
 
-            if (!success)
-            {
-                throw new Error(
-                    `Command ${command.toUpperCase()} was not accepted.`
-                );
-            }
+            if (!result.success) throw new Error(result.message);
+            trackCommand(result, selectedDeviceId, command);
 
             setConnectionStatus(
                 "Connected"
             );
 
             console.log(
-                `[HomePage] ${command.toUpperCase()} accepted`
+                `[HomePage] ${command.toUpperCase()} request sent`
             );
         }
         catch (error)
@@ -1148,9 +1172,7 @@ if (devices.length > 0)
                 "Command Failed"
             );
 
-            setModeError(
-                "Manual command failed"
-            );
+            setCommandError(error instanceof Error ? error.message : "Command submission could not be confirmed.");
         }
         finally
         {
@@ -1177,9 +1199,11 @@ if (devices.length > 0)
                 "stop"
             );
 
-            setConnectionStatus(
-                "Stopping..."
-            );
+            setModeError(null);
+            cancelCommandTracking();
+            setCommandNotice(null);
+            setCommandError(null);
+            setConnectionStatus("Stopping...");
 
             //----------------------------------------------------------
             // STOP is immediate only.
@@ -1187,25 +1211,21 @@ if (devices.length > 0)
             // It does NOT alter override_mode.
             //----------------------------------------------------------
 
-            const success =
-                await cloudService.sendCommand(
+            const result =
+                await cloudService.sendCommandResult(
                     selectedDeviceId,
                     "stop"
                 );
 
-            if (!success)
-            {
-                throw new Error(
-                    "STOP command was not accepted."
-                );
-            }
+            if (!result.success) throw new Error(result.message);
+            trackCommand(result, selectedDeviceId, "stop");
 
             setConnectionStatus(
                 "Connected"
             );
 
             console.log(
-                "[HomePage] STOP accepted"
+                "[HomePage] STOP request sent"
             );
         }
         catch (error)
@@ -1215,9 +1235,8 @@ if (devices.length > 0)
                 error
             );
 
-            setConnectionStatus(
-                "STOP Failed"
-            );
+            setConnectionStatus("STOP Unconfirmed");
+            setCommandError(error instanceof Error ? error.message : "STOP submission could not be confirmed.");
         }
         finally
         {
@@ -1364,6 +1383,7 @@ if (devices.length > 0)
 
                 <AppHeader
                     title="HonorPole Dashboard"
+                    reserveSpace
                 />
 
                 <main
@@ -1586,10 +1606,7 @@ if (devices.length > 0)
 
                                 <StatusRow
                                     label="Firmware"
-                                    value={
-                                        device.firmware ||
-                                        "--"
-                                    }
+                                    value={getFirmwareDisplay(device)}
                                 />
 
                                 <StatusRow
@@ -1602,10 +1619,8 @@ if (devices.length > 0)
                                 />
 
                                 <StatusRow
-                                    label="Cloud"
-                                    value={
-                                        connectionStatus
-                                    }
+                                    label="Pole Cloud"
+                                    value={getPoleCloudStatus(device)}
                                 />
 
                             </div>
@@ -1634,7 +1649,7 @@ if (devices.length > 0)
                                 <StatusRow
                                     label="Signal"
                                     value={
-                                        `${device.network?.signalStrength ?? 0}%`
+                                        (device.network?.signalStrength ?? 0) === 0 ? "--" : `${device.network?.signalStrength} dBm`
                                     }
                                 />
 
@@ -1657,25 +1672,31 @@ if (devices.length > 0)
 
                     <InfoCard title="Flag Status">
 
+                        {!positionPresentation.canMove && (
+                            <p role="status" className="mb-4 text-amber-200">{positionPresentation.reason}. Position unknown; travel controls unavailable.</p>
+                        )}
+
                         <LiveFlagVisualization
                             currentPosition={device.currentPosition}
+                            targetPosition={device.targetPosition}
                             learnedTopPosition={device.learnedTopPosition}
                             moving={device.moving}
                             movement={device.movement}
                             online={device.online}
+                            calibrated={device.calibrated}
                         />
 
                         <StatusRow
                             label="Current Position"
                             value={
-                                currentPosition
+                                positionPresentation.canMove ? currentPosition : "Unknown"
                             }
                         />
 
                         <StatusRow
                             label="Target Position"
                             value={
-                                targetPosition
+                                positionPresentation.canMove ? targetPosition : "Unknown"
                             }
                         />
 
@@ -1689,7 +1710,7 @@ if (devices.length > 0)
                         />
 
                         <StatusRow
-                            label="Operating Mode"
+                            label="Requested Mode"
                             value={
                                 modeLoading
                                     ? "Loading..."
@@ -1800,7 +1821,7 @@ if (devices.length > 0)
                     {/* OPERATING MODE */}
                     {/* ================================================== */}
 
-                    <InfoCard title="Operating Mode">
+                    <InfoCard title="Requested Mode">
 
                         <div
                             className="
@@ -1814,7 +1835,7 @@ if (devices.length > 0)
                                     text-gray-400
                                 "
                             >
-                                Current Mode
+                                Requested Mode
                             </div>
 
                             <div
@@ -1843,6 +1864,16 @@ if (devices.length > 0)
                                 >
                                     TEST MODE ACTIVE
                                 </div>
+                            )}
+
+                            {commandNotice && (
+                                <div role="status" className="mt-2 text-sm text-amber-200">
+                                    {commandNotice}
+                                </div>
+                            )}
+
+                            {commandError && (
+                                <div role="alert" className="mt-2 text-sm text-red-300">{commandError}</div>
                             )}
 
                             {modeError && (
@@ -1879,7 +1910,7 @@ if (devices.length > 0)
                                     sendingCommand !==
                                         null ||
                                     modeLoading ||
-                                    testMode
+                                    testMode || !positionPresentation.canMove
                                 }
                                 onClick={() =>
                                     void enableAutoMode()
@@ -1903,7 +1934,7 @@ if (devices.length > 0)
                                     sendingCommand !==
                                         null ||
                                     modeLoading ||
-                                    testMode
+                                    testMode || !positionPresentation.canMove
                                 }
                                 onClick={() =>
                                     void sendPositionCommand(
@@ -1931,7 +1962,7 @@ if (devices.length > 0)
                                     sendingCommand !==
                                         null ||
                                     modeLoading ||
-                                    testMode
+                                    testMode || !positionPresentation.canMove
                                 }
                                 onClick={() =>
                                     void sendPositionCommand(
@@ -1957,7 +1988,7 @@ if (devices.length > 0)
                                     sendingCommand !==
                                         null ||
                                     modeLoading ||
-                                    testMode
+                                    testMode || !positionPresentation.canMove
                                 }
                                 onClick={() =>
                                     void sendPositionCommand(

@@ -1,4 +1,7 @@
-﻿import { useEffect, useState } from "react";
+import { useCommandDelivery } from "../hooks/useCommandDelivery";
+import { getPoleCloudStatus, getFirmwareDisplay } from "../services/connectionPresentation";
+import { getPositionPresentation } from "./positionPresentation";
+import { useEffect, useState } from "react";
 import DevicePairing from "./DevicePairing";
 import { Button } from "./ui/button";
 import {
@@ -34,7 +37,9 @@ export default function CloudDeviceControl()
     const [loading, setLoading] = useState(false);
     const [switching, setSwitching] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [commandError, setCommandError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
+    const { trackCommand, cancelCommandTracking } = useCommandDelivery(selectedDevice, setSuccess);
     const [showPairing, setShowPairing] = useState(false);
 
     const selectedDeviceInfo =
@@ -52,6 +57,7 @@ export default function CloudDeviceControl()
         setOperatingMode(null);
         setError(null);
         setSuccess(null);
+        setCommandError(null);
 
         // This persisted selection is shared with the Home page.
         cloudService.setDevice(device);
@@ -208,9 +214,17 @@ export default function CloudDeviceControl()
             return;
         }
 
+        if (command !== "stop" && !getPositionPresentation(telemetry).canMove)
+        {
+            setError(getPositionPresentation(telemetry).reason);
+            return;
+        }
+
+        cancelCommandTracking();
         setLoading(true);
         setError(null);
         setSuccess(null);
+        setCommandError(null);
 
         try
         {
@@ -250,24 +264,20 @@ export default function CloudDeviceControl()
                     ? "bottom"
                     : command;
 
-            const sent = await cloudService.sendCommand(
+            const result = await cloudService.sendCommandResult(
                 selectedDevice,
                 deviceCommand
             );
 
-            if (!sent)
-            {
-                throw new Error("Command could not be delivered.");
+            if (!result.success) {
+                throw new Error(result.message);
             }
-
-            setSuccess(
-                `${command.toUpperCase()} sent to ${selectedDeviceInfo?.deviceName ?? selectedDevice}.`
-            );
+            trackCommand(result, selectedDevice, deviceCommand);
 
         }
         catch (err)
         {
-            setError(
+            setCommandError(
                 err instanceof Error
                     ? err.message
                     : "Failed to send command."
@@ -288,19 +298,9 @@ export default function CloudDeviceControl()
     const controlsDisabled =
         loading || switching || !telemetry?.online;
 
-    const positionPercent =
-        telemetry && telemetry.learnedTopPosition > 0
-            ? Math.max(
-                0,
-                Math.min(
-                    100,
-                    Math.round(
-                        telemetry.currentPosition /
-                        telemetry.learnedTopPosition * 100
-                    )
-                )
-            )
-            : null;
+    const positionPresentation = getPositionPresentation(telemetry);
+    const positionPercent = positionPresentation.percent;
+    const travelControlsDisabled = controlsDisabled || !positionPresentation.canMove;
 
     return (
         <div className="min-h-screen bg-gray-50 p-4 pb-28 sm:p-6 sm:pb-28">
@@ -413,6 +413,12 @@ export default function CloudDeviceControl()
                     </Alert>
                 )}
 
+                {commandError && (
+                    <Alert role="alert" className="bg-red-50 border-red-200">
+                        <AlertDescription className="text-red-800">{commandError}</AlertDescription>
+                    </Alert>
+                )}
+
                 {success && (
                     <Alert className="bg-green-50 border-green-200">
                         <AlertDescription className="text-green-800">
@@ -471,7 +477,7 @@ export default function CloudDeviceControl()
                                 <div className="flex justify-between gap-4 py-3">
                                     <span className="text-gray-500">Firmware</span>
                                     <span className="font-semibold text-gray-900">
-                                        {telemetry?.firmware ?? selectedDeviceInfo?.firmware ?? "--"}
+                                        {getFirmwareDisplay(telemetry)}
                                     </span>
                                 </div>
 
@@ -483,9 +489,9 @@ export default function CloudDeviceControl()
                                 </div>
 
                                 <div className="flex justify-between gap-4 py-3">
-                                    <span className="text-gray-500">Cloud</span>
+                                    <span className="text-gray-500">Pole Cloud</span>
                                     <span className="font-semibold text-gray-900">
-                                        {telemetry?.network?.cloudConnected ? "Connected" : "Disconnected"}
+                                        {getPoleCloudStatus(telemetry)}
                                     </span>
                                 </div>
 
@@ -504,18 +510,23 @@ export default function CloudDeviceControl()
                                 </div>
                             </div>
                         </div>
+                        {!positionPresentation.canMove && (
+                            <Alert><AlertDescription>
+                                {positionPresentation.reason}. Position unknown; travel controls unavailable.
+                            </AlertDescription></Alert>
+                        )}
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                             <div className="rounded-lg bg-gray-100 p-4">
-                                <div className="text-sm text-gray-500">Flag Position</div>
+                                <div className="text-sm text-gray-500">Estimated Position</div>
                                 <div className="mt-1 font-semibold text-gray-900">
                                     {positionPercent === null
-                                        ? "Waiting for status"
+                                        ? "Unknown"
                                         : `${positionPercent}%`}
                                 </div>
                             </div>
 
                             <div className="rounded-lg bg-gray-100 p-4">
-                                <div className="text-sm text-gray-500">Operating Mode</div>
+                                <div className="text-sm text-gray-500">Requested Mode</div>
                                 <div className="mt-1 font-semibold text-gray-900">
                                     {operatingMode ?? "Loading"}
                                 </div>
@@ -544,7 +555,7 @@ export default function CloudDeviceControl()
                         <div className="grid grid-cols-2 gap-4">
                             <Button
                                 onClick={() => void handleCommand("full")}
-                                disabled={controlsDisabled}
+                                disabled={travelControlsDisabled}
                                 className="h-20 text-lg bg-green-600 hover:bg-green-700"
                             >
                                 USA Full
@@ -552,7 +563,7 @@ export default function CloudDeviceControl()
 
                             <Button
                                 onClick={() => void handleCommand("half")}
-                                disabled={controlsDisabled}
+                                disabled={travelControlsDisabled}
                                 className="h-20 text-lg bg-yellow-600 hover:bg-yellow-700"
                             >
                                 HALF STAFF
@@ -560,7 +571,7 @@ export default function CloudDeviceControl()
 
                             <Button
                                 onClick={() => void handleCommand("down")}
-                                disabled={controlsDisabled}
+                                disabled={travelControlsDisabled}
                                 className="h-20 text-lg bg-red-600 hover:bg-red-700"
                             >
                                 DOWN
@@ -568,7 +579,7 @@ export default function CloudDeviceControl()
 
                             <Button
                                 onClick={() => void handleCommand("auto")}
-                                disabled={controlsDisabled}
+                                disabled={travelControlsDisabled}
                                 className="h-20 text-lg bg-blue-600 hover:bg-blue-700"
                             >
                                 AUTO
@@ -576,7 +587,7 @@ export default function CloudDeviceControl()
 
                             <Button
                                 onClick={() => void handleCommand("stop")}
-                                disabled={switching || !telemetry?.online}
+                                disabled={switching || !selectedDevice}
                                 className="col-span-2 h-20 text-xl font-bold bg-red-700 hover:bg-red-800"
                             >
                                 STOP MOTOR

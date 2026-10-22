@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabaseClient";
 
@@ -63,11 +64,38 @@ function flagPositionStyle(
 //======================================================================
 
 export default function AppHeader({
-    title
+    title,
+    reserveSpace = false
 }: {
     title: string;
+    reserveSpace?: boolean;
 })
 {
+    const headerRef = useRef<HTMLDivElement>(null);
+    const [headerHeight, setHeaderHeight] = useState(0);
+
+    useLayoutEffect(() => {
+        if (!reserveSpace) return;
+        const header = headerRef.current;
+        if (!header) return;
+
+        const updateHeight = () => {
+            setHeaderHeight(Math.ceil(header.getBoundingClientRect().height));
+        };
+        updateHeight();
+
+        const observer = typeof ResizeObserver !== "undefined"
+            ? new ResizeObserver(updateHeight)
+            : null;
+        observer?.observe(header);
+        window.addEventListener("resize", updateHeight);
+
+        return () => {
+            observer?.disconnect();
+            window.removeEventListener("resize", updateHeight);
+        };
+    }, [reserveSpace]);
+
     const navigate =
         useNavigate();
 
@@ -118,7 +146,7 @@ const handleLogout = async () =>
     try
     {
         const { error } =
-            await supabase.auth.signOut();
+            await supabase.auth.signOut({ scope: 'local' });
 
         if (error)
         {
@@ -153,7 +181,9 @@ const handleLogout = async () =>
     //------------------------------------------------------------------
 
     return (
+        <>
         <div
+    ref={headerRef}
     className="
         fixed
         top-0
@@ -292,5 +322,9 @@ const handleLogout = async () =>
             </div>
 
         </div>
+        {reserveSpace && (
+            <div aria-hidden="true" style={{ height: headerHeight }} />
+        )}
+        </>
     );
 }

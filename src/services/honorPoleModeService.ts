@@ -23,7 +23,7 @@ function authorizedHeaders(): Record<string, string>
     {
         throw new Error("Sign in to control an HonorPole");
     }
-    return { Authorization: `Bearer ${token}` };
+    return { "X-Device-Auth": `Bearer ${token}` };
 }
 
 //----------------------------------------------------------
