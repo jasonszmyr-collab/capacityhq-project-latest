@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@capacitor/app": "^8.1.1",
-    "@capacitor/core": "^8.3.1",
+    "@capacitor/core": "8.5.1",
     "@capacitor/network": "^8.0.1",
     "@capacitor/preferences": "^8.0.0",
     "@hookform/resolvers": "^5.2.2",
@@ -90,8 +90,8 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "@capacitor/android": "^8.3.1",
-    "@capacitor/cli": "^8.0.0",
+    "@capacitor/android": "8.5.1",
+    "@capacitor/cli": "8.4.3",
     "@eslint/js": "^9.25.0",
     "@types/node": "^24.7.0",
     "@types/react": "^18.2.0",
