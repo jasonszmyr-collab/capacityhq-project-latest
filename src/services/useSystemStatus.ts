@@ -64,6 +64,13 @@ export function useSystemStatus()
             // Movement has priority over stationary position.
             //--------------------------------------------------
 
+            if (!connected || telemetry.online !== true ||
+                telemetry.calibrated !== true)
+            {
+                setPhysicalPosition("UNKNOWN");
+                return;
+            }
+
             if (telemetry.moving)
             {
                 setPhysicalPosition(
