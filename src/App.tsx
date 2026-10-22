@@ -1,5 +1,6 @@
 import "./App.css";
 import { useEffect, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { App as CapacitorApp } from "@capacitor/app";
 
@@ -85,46 +86,56 @@ function App() {
       }
     };
 
-    const initializeAuth = async () => {
-      const { data } = await supabase.auth.getSession();
-
-      if (!mounted) {
-        return;
+    let authVersion = 0;
+    const applySession = (session: Session | null) => {
+      if (!mounted) return;
+      if (session?.access_token && session.user?.id) {
+        cloudService.setAuthentication(session.access_token, session.user.id);
+      } else {
+        cloudService.clearAuthentication();
       }
-
-      if (data.session?.access_token && data.session?.user?.id) {
-  cloudService.setAuthToken(data.session.access_token);
-  cloudService.setUserId(data.session.user.id);
-} else {
-  cloudService.clearAuthentication();
-}
-
-      setUser(data.session?.user ?? null);
+      setUser(session?.user ?? null);
       setLoading(false);
     };
 
-    void initializeAuth();
+    // Subscribe first. A late initial read must not resurrect a signed-out session.
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      authVersion++;
+      applySession(session);
+      if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
+      if (event === "SIGNED_OUT") setPasswordRecovery(false);
+    });
 
-    const { data: authListener } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-
-        if (session?.access_token && session?.user?.id) {
-  cloudService.setAuthToken(session.access_token);
-  cloudService.setUserId(session.user.id);
-} else {
-  cloudService.clearAuthentication();
-}
-        setUser(session?.user ?? null);
-
-        if (event === "PASSWORD_RECOVERY") {
-          setPasswordRecovery(true);
+    cloudService.setSessionRecoveryHandler(async () => {
+      const version = authVersion;
+      const userId = cloudService.getUserId();
+      try {
+        // Called outside onAuthStateChange to avoid taking the auth lock recursively.
+        const { data, error } = await supabase.auth.refreshSession();
+        if (!mounted) return false;
+        if (version !== authVersion) {
+          return cloudService.isAuthenticated() && cloudService.getUserId() === userId;
         }
-
-        if (event === "SIGNED_OUT") {
-          setPasswordRecovery(false);
+        if (error) {
+          if ([400, 401, 403].includes(error.status ?? 0)) {
+            authVersion++;
+            applySession(null);
+          }
+          return false; // Network/outage errors pause cloud access; never replay a command.
         }
+        applySession(data.session);
+        return !!data.session && data.session.user.id === userId;
+      } catch {
+        return false;
       }
-    );
+    });
+
+    const initialVersion = authVersion;
+    void supabase.auth.getSession().then(({ data }) => {
+      if (mounted && initialVersion === authVersion) applySession(data.session);
+    }).catch(() => {
+      if (mounted && initialVersion === authVersion) applySession(null);
+    });
 
     let appUrlOpenHandle:
       | Awaited<ReturnType<typeof CapacitorApp.addListener>>
@@ -150,6 +161,7 @@ function App() {
     return () => {
       mounted = false;
       authListener.subscription.unsubscribe();
+      cloudService.setSessionRecoveryHandler(null);
 
       if (appUrlOpenHandle) {
         void appUrlOpenHandle.remove();
