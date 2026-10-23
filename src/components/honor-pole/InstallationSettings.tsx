@@ -119,7 +119,14 @@ export default function InstallationSettings() {
       setZip(saved.installation_zip);
       setNotice(`Saved installation and AUTO settings for ${deviceId}.`);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to save pole settings.");
+      const message = cause instanceof Error ? cause.message : "";
+      const connectionFailure =
+        /failed to fetch|networkerror|network request failed|load failed|signal is aborted|operation was aborted/i.test(message) ||
+        (cause instanceof Error &&
+          (cause.name === "AbortError" || cause.name === "TimeoutError"));
+      setError(connectionFailure
+        ? "Unable to confirm the save. Your entries are still here. Check your internet connection, then press Save settings again."
+        : message || "Unable to save pole settings.");
     } finally {
       setSaving(false);
     }
