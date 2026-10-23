@@ -510,7 +510,7 @@ const HomePage = () =>
         );
 
     const [showPairing, setShowPairing] =
-    useState(false);    
+    useState(false);
     const [shareCode, setShareCode] = useState<string | null>(null);
     const [shareError, setShareError] = useState<string | null>(null);
     const [sharing, setSharing] = useState(false);
@@ -551,7 +551,7 @@ const HomePage = () =>
     ] =
         useState<HonorPoleDirectiveStatus | null>(
             null
-        );    
+        );
 
     const [loading, setLoading] =
         useState(true);
@@ -613,7 +613,7 @@ const HomePage = () =>
 
     useEffect(() =>
     {
-        
+
 
         let mounted = true;
 
@@ -678,7 +678,7 @@ const HomePage = () =>
         void (async () =>
         {
             try
-    {  
+    {
                         let authAttempts = 0;
 
         while (
@@ -710,7 +710,7 @@ const HomePage = () =>
 
             return;
         }
-        
+
                 const devices =
             await cloudService.getDevices();
 
@@ -1192,7 +1192,7 @@ if (devices.length > 0)
         {
             return;
         }
-  
+
         try
         {
             setSendingCommand(
