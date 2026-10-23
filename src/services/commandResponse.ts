@@ -48,7 +48,7 @@ export function commandReply(
     if (body?.success === true && status === "queued") {
         return {
             success: true, stage: "queued",
-            message: `${label} queued for ${deviceId}. Waiting for board confirmation.`,
+            message: `${label} queued for ${deviceId}. Waiting for the server delivery report.`,
             ...(typeof body.commandId === "string" ? { commandId: body.commandId } : {})
         };
     }
