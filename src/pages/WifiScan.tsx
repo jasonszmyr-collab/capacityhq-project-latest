@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import AppHeader from "../components/AppHeader";
@@ -9,145 +9,68 @@ import {
   type WiFiNetwork
 } from "../services/wifiService";
 
+import { WiFiScanError } from "../services/wifiScanResponse";
+
 export default function WifiScan() {
 
   const navigate = useNavigate();
-  const [debug, setDebug] = useState("");
-
   const [networks, setNetworks] = useState<WiFiNetwork[]>([]);
-  const [scanning, setScanning] = useState(false);
-
+  const [scanning, setScanning] = useState(true);
   const [isHonorPoleConnected, setIsHonorPoleConnected] = useState(false);
   const [deviceReachable, setDeviceReachable] = useState(false);
-
   const [error, setError] = useState<string | null>(null);
+  const [emptyScan, setEmptyScan] = useState(false);
+  const mounted = useRef(false);
+  const requestId = useRef(0);
+  const busy = useRef(false);
 
-  //--------------------------------------------------
-  // INITIALIZE
-  //--------------------------------------------------
-
-  useEffect(() => {
-    init();
-  }, []);
-
-  //--------------------------------------------------
-  // INITIALIZE PAGE
-  //--------------------------------------------------
-
-  const init = async () => {
-
-    console.log("========== WIFI SETUP ==========");
-
+  // Initial load and Refresh use the same result and recovery handling.
+  const scanForNetworks = async () => {
+    if (!mounted.current || busy.current) return;
+    busy.current = true;
+    const id = ++requestId.current;
+    const current = () => mounted.current && requestId.current === id;
     setScanning(true);
     setError(null);
-
-    console.log("INIT START");
-
-    const connected = await checkConnection();
-
-    console.log("CONNECTED:", connected);
-
-    if (!connected) {
-      setError("Connect to HonorPole-Setup WiFi first.");
-    }
-
-    setScanning(false);
-  };
-
-  //--------------------------------------------------
-  // CHECK HONORPOLE CONNECTION
-  //--------------------------------------------------
-
-  const checkConnection = async (): Promise<boolean> => {
-
-  try {
-
-    setDebug("Checking HonorPole...");
-
-    const connected = await wifiService.isConnectedToHonorPole();
-
-    setDebug(prev => prev + "\nConnected: " + connected);
-
-    if (!connected) {
-
-      setIsHonorPoleConnected(false);
-      setDeviceReachable(false);
-
-      return false;
-    }
-
-    setIsHonorPoleConnected(true);
-    setDeviceReachable(true);
-
-    setDebug(prev => prev + "\nScanning...");
-
-    const availableNetworks = await wifiService.scanNetworks();
-
-    setDebug(prev => prev + "\nNetworks Found: " + availableNetworks.length);
-
-    if (!availableNetworks.length) {
-
-      setError("No WiFi networks found");
-
-      return false;
-    }
-
-    const filtered = availableNetworks
-      .filter(n => n.ssid !== "HonorPole-Setup")
-      .sort((a, b) => b.signal - a.signal);
-
-    setNetworks(filtered);
-
-    return true;
-
-  } catch (err: any) {
-
-  setDebug(prev =>
-    prev +
-    "\nERROR:\n" +
-    (err?.message || JSON.stringify(err) || String(err))
-  );
-
-  setIsHonorPoleConnected(false);
-  setDeviceReachable(false);
-
-  return false;
-
-}
-
-};
-
-  //--------------------------------------------------
-  // MANUAL REFRESH
-  //--------------------------------------------------
-
-  const scanForNetworks = async () => {
-
-    setScanning(true);
-
+    setEmptyScan(false);
+    setNetworks([]);
+    setIsHonorPoleConnected(false);
+    setDeviceReachable(false);
     try {
-
-      const result =
-        await wifiService.scanNetworks();
-
-      console.log("Manual Scan:", result);
-
+      const result = await wifiService.scanNetworks();
+      if (!current()) return;
       const filtered = result
-        .filter(n => n.ssid !== "HonorPole-Setup")
+        .filter(n => n.ssid !== "HonorPole-Setup" && !n.ssid.startsWith("HonorPole-Setup-"))
         .sort((a, b) => b.signal - a.signal);
-
+      setIsHonorPoleConnected(true);
+      setDeviceReachable(true);
       setNetworks(filtered);
-
+      setEmptyScan(filtered.length === 0);
     } catch (err) {
-
-      console.error(err);
-
-      setError("Failed to scan networks");
-
+      if (!current()) return;
+      // A rejected or malformed HTTP reply still establishes reachability.
+      const reached = err instanceof WiFiScanError && err.code !== "unreachable";
+      setIsHonorPoleConnected(reached);
+      setDeviceReachable(reached);
+      setError(err instanceof WiFiScanError ? err.message
+        : "Unable to scan Wi-Fi networks. Check the connection and press Refresh Networks to try again.");
+    } finally {
+      if (current()) {
+        busy.current = false;
+        setScanning(false);
+      }
     }
-
-    setScanning(false);
   };
+
+  useEffect(() => {
+    mounted.current = true;
+    void scanForNetworks();
+    return () => {
+      mounted.current = false;
+      ++requestId.current;
+      busy.current = false;
+    };
+  }, []);
 
   //--------------------------------------------------
   // UI
@@ -165,7 +88,9 @@ export default function WifiScan() {
 
         <div className="p-4 rounded-xl border border-white/20 bg-white/10 text-center">
 
-          {!isHonorPoleConnected && (
+          {scanning && <div role="status">Checking HonorPole and scanning Wi-Fi networks...</div>}
+
+          {!scanning && !isHonorPoleConnected && (
 
             <div className="text-yellow-300">
 
@@ -180,7 +105,7 @@ export default function WifiScan() {
 
           )}
 
-          {isHonorPoleConnected && !deviceReachable && (
+          {!scanning && isHonorPoleConnected && !deviceReachable && (
 
             <div className="text-red-400">
 
@@ -192,7 +117,7 @@ export default function WifiScan() {
 
           )}
 
-          {isHonorPoleConnected && deviceReachable && (
+          {!scanning && isHonorPoleConnected && deviceReachable && (
 
             <div className="text-green-400">
 
@@ -222,14 +147,22 @@ export default function WifiScan() {
 
         {/* ERROR */}
 
-        {error && (
+        {error && !scanning && (
 
-          <div className="text-red-400 text-center">
+          <div role="alert" className="text-red-400 text-center">
 
             {error}
 
           </div>
 
+        )}
+
+        {emptyScan && !scanning && !error && (
+          <div role="status" className="text-amber-300 text-center">
+            No home Wi-Fi networks were found. Keep connected to this pole's
+            HonorPole-Setup Wi-Fi, move the pole closer to your router if needed,
+            then press Refresh Networks.
+          </div>
         )}
 
         {/* NETWORKS */}
