@@ -33,7 +33,9 @@ export default function WiFiSetup() {
 
         if (device) {
 
-          console.log("HonorPole Found", device);
+          if (import.meta.env.DEV) {
+            console.log("HonorPole found");
+          }
 
           const status = await wifiService.getDeviceStatus();
 

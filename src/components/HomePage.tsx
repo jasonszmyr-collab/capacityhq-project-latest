@@ -719,10 +719,9 @@ const HomePage = () =>
             return;
         }
 
-        console.log(
-    "[HomePage] Real devices loaded:",
-    devices
-);
+        if (import.meta.env.DEV) {
+            console.log("[HomePage] Device count:", devices.length);
+        }
         setAvailableDevices(devices);
 
 if (devices.length > 0)
