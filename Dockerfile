@@ -1,18 +1,18 @@
 # Use Node.js LTS version
-FROM node:20-alpine AS base
+FROM node:22-alpine AS base
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@10.26.2 --activate
+# Match the tested npm version
+RUN npm install --global npm@11.7.0 --ignore-scripts
 
 # Set working directory
 WORKDIR /app
 
 # Copy package files
-COPY package.json pnpm-lock.yaml ./
+COPY package.json package-lock.json ./
 
 # Install dependencies
 FROM base AS dependencies
-RUN pnpm install --frozen-lockfile
+RUN npm ci --ignore-scripts
 
 # Build stage
 FROM base AS build
@@ -20,7 +20,7 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 
 # Build the application
-RUN pnpm build
+RUN npm run build
 
 # Production stage
 FROM nginx:alpine AS production
