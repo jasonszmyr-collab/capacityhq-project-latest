@@ -33,7 +33,7 @@ async function requestSettings(url: string, init: RequestInit = {}): Promise<Hon
   const response = await fetch(url, {
     ...init,
     headers: {
-      Authorization: `Bearer ${token}`,
+      "X-Device-Auth": `Bearer ${token}`,
       Accept: "application/json",
       ...(init.body ? { "Content-Type": "application/json" } : {}),
     },
