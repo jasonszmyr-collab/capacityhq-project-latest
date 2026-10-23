@@ -18,6 +18,19 @@ const CHECKBOXES: { key: keyof SettingsUpdate; title: string }[] = [
   { key: "auto_apply_verified_directives", title: "Apply verified directives automatically" },
 ];
 
+function settingsLoadError(cause: unknown, fallback: string): string {
+  const message = cause instanceof Error ? cause.message : "";
+  if (/failed to fetch|networkerror|network request failed|load failed/i.test(message)) {
+    return "Unable to connect to HonorPole settings. Check your internet connection, then press Retry.";
+  }
+  if (cause instanceof Error &&
+      (cause.name === "AbortError" || cause.name === "TimeoutError" ||
+       /signal is aborted|operation was aborted/i.test(message))) {
+    return "The settings request was interrupted or timed out. Check your connection, then press Retry.";
+  }
+  return message || fallback;
+}
+
 export default function InstallationSettings() {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState(cloudService.getCurrentDeviceId() || "");
@@ -27,9 +40,13 @@ export default function InstallationSettings() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setError("");
+    setNotice("");
     cloudService.getDevices().then((list) => {
       if (!active) return;
       setDevices(list);
@@ -40,10 +57,10 @@ export default function InstallationSettings() {
     }).catch((cause) => {
       if (!active) return;
       setLoading(false);
-      setError(cause instanceof Error ? cause.message : "Unable to load your HonorPoles.");
+      setError(settingsLoadError(cause, "Unable to load your HonorPoles."));
     });
     return () => { active = false; };
-  }, []);
+  }, [reload]);
 
   useEffect(() => {
     if (!deviceId || !devices.some((device) => device.deviceId === deviceId)) return;
@@ -58,7 +75,7 @@ export default function InstallationSettings() {
       setSettings(value);
       setZip(value.installation_zip);
     }).catch((cause) => {
-      if (active) setError(cause instanceof Error ? cause.message : "Unable to load pole settings.");
+      if (active) setError(settingsLoadError(cause, "Unable to load pole settings."));
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [deviceId, devices]);
@@ -163,6 +180,13 @@ export default function InstallationSettings() {
         </>
       )}
       {error && <p role="alert" className="text-sm text-red-400 mt-3">{error}</p>}
+      {error && !loading && !settings && (
+        <button type="button" disabled={saving}
+          onClick={() => setReload((value) => value + 1)}
+          className="mt-3 rounded-lg bg-blue-600 px-4 py-3 font-semibold disabled:opacity-50">
+          Retry
+        </button>
+      )}
       {notice && <p role="status" className="text-sm text-green-300 mt-3">{notice}</p>}
     </section>
   );
