@@ -799,6 +799,20 @@ console.log("Ready.");
 
     //------------------------------------------------------
 
+    public getProtectedSetupScope(): string {
+        return `${this.userId ?? ""}:${this.authRevision}:${this.selectionRevision}:${this.currentDeviceId ?? ""}`;
+    }
+
+    public async requestProtectedSetup(deviceId: string, requestId?: string): Promise<unknown> {
+        const scope = this.getProtectedSetupScope();
+        if (!this.isAuthenticated() || deviceId !== this.currentDeviceId) throw new Error("Select a pole and sign in first.");
+        const endpoint = `/api/device/${encodeURIComponent(deviceId)}/setup` +
+            (requestId ? `/${encodeURIComponent(requestId)}` : "");
+        const result = await this.request<unknown>(endpoint, { method: requestId ? "GET" : "POST" }, false);
+        if (scope !== this.getProtectedSetupScope()) throw new Error("Pole or login changed during setup.");
+        return result;
+    }
+
     public getCurrentDeviceId():
         string | null
     {

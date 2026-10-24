@@ -129,6 +129,11 @@ export default function WifiScan() {
 
         </div>
 
+        <button onClick={() => navigate("/wifi/protected")}
+          className="w-full p-3 rounded-xl border border-white/30">
+          Open protected setup / enter setup password
+        </button>
+
         {/* BUTTON */}
 
         <button

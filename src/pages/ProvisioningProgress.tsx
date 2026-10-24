@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import cloudService from "../services/cloudService";
 import { discovery } from "../services/deviceDiscovery";
 
 import AppHeader from "../components/AppHeader";
@@ -28,137 +29,43 @@ export default function ProvisioningProgress() {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-
-  //------------------------------------------------
-  // Stage 1
-  //------------------------------------------------
-
-  setProgress(15);
-
-  setStatus("Credentials Saved");
-
-  setDetail(
-    "HonorPole accepted your WiFi settings."
-  );
-
-  //------------------------------------------------
-  // Stage 2
-  //------------------------------------------------
-
-  const stage2 = setTimeout(() => {
-
-    setProgress(35);
-
-    setStatus("Restarting HonorPole...");
-
-    setDetail(
-      "The device is rebooting."
-    );
-
-  }, 1500);
-
-  //------------------------------------------------
-  // Stage 3
-  //------------------------------------------------
-
-  const stage3 = setTimeout(() => {
-
-    setProgress(60);
-
-    setStatus(`Connecting to ${ssid}`);
-
-    setDetail(
-      "Joining your home WiFi network..."
-    );
-
-  }, 5000);
-
-  //------------------------------------------------
-  // Stage 4 - Discover HonorPole
-  //------------------------------------------------
-
-  let search: ReturnType<typeof setInterval>;
-
-  let failureTimer: ReturnType<typeof setTimeout>;
-
-  const discoverTimer = setTimeout(() => {
-
-    setProgress(80);
-
-    setStatus("Searching for HonorPole...");
-
-    setDetail(
-      "Looking for the device on your network..."
-    );
-
-    search = setInterval(async () => {
-
-  try {
-
-    const device = await discovery.discover();
-
-    if (!device) {
-      return;
+    const deviceId = location.state?.deviceId;
+    const scope = cloudService.getProtectedSetupScope();
+    let active = true;
+    let next: ReturnType<typeof setTimeout>;
+    const current = () => active && scope === cloudService.getProtectedSetupScope();
+    if (!deviceId || deviceId !== cloudService.getCurrentDeviceId()) {
+      setFailed(true); setStatus("Select the HonorPole again");
+      setDetail("This page has no matching Wi-Fi save for the selected pole.");
+      return () => { active = false; };
     }
-
-    clearInterval(search);
-    clearTimeout(failureTimer);
-
-    setDeviceIP(device.ip);
-    setFirmware(device.firmware);
-
-    setProgress(100);
-
-    setStatus("HonorPole Connected!");
-
-    setDetail("Device found successfully.");
-
-  } catch (error) {
-
-    console.error(
-      "HonorPole discovery failed:",
-      error
-    );
-
-  }
-
-}, 2000);
-
-// Stop searching after 60 seconds.
-failureTimer = setTimeout(() => {
-
-  clearInterval(search);
-
-  setFailed(true);
-
-  setStatus("Unable to Find HonorPole");
-
-  setDetail(
-    "HonorPole did not reconnect to your WiFi. Check that the WiFi password is correct and that the device is powered on, then try setup again."
-  );
-
-}, 60000);
-
-}, 10000);
-
-  //------------------------------------------------
-  // Cleanup
-  //------------------------------------------------
-
-  return () => {
-
-  clearTimeout(stage2);
-  clearTimeout(stage3);
-  clearTimeout(discoverTimer);
-  clearTimeout(failureTimer);
-
-  if (search) {
-    clearInterval(search);
-  }
-
-};
-
-}, [ssid]);
+    setProgress(35);
+    setStatus("Wi-Fi settings saved");
+    setDetail(`Reconnect your phone to ${ssid}. Keep ${deviceId} powered on while it restarts. We will check that same pole.`);
+    const deadline = Date.now() + 90000;
+    async function poll() {
+      if (!current()) return;
+      try {
+        const device = await discovery.discover(deviceId);
+        if (!current()) return;
+        if (device) {
+          setDeviceIP(device.ip); setFirmware(device.firmware);
+          setProgress(100); setStatus(`${deviceId} found on the local network`);
+          setDetail("The selected pole responded. Check Home for its cloud connection.");
+          return;
+        }
+      } catch { /* Failed discovery cannot establish reconnection. */ }
+      if (!current()) return;
+      if (Date.now() >= deadline) {
+        setFailed(true); setStatus("Reconnection not confirmed");
+        setDetail(`Reconnect your phone to ${ssid} and check ${deviceId} on Home. A failed search does not establish that the Wi-Fi password is wrong.`);
+        return;
+      }
+      next = setTimeout(() => void poll(), 2000);
+    }
+    next = setTimeout(() => void poll(), 5000);
+    return () => { active = false; clearTimeout(next); };
+  }, [ssid, location.state?.deviceId]);
 
   return (
 
