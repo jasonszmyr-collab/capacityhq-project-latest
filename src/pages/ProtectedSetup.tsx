@@ -4,6 +4,7 @@ import AppHeader from "../components/AppHeader";
 import BottomNav from "../components/BottomNav";
 import cloudService from "../services/cloudService";
 import { protectedSetup } from "../services/protectedSetup";
+import { Clipboard } from "@capacitor/clipboard";
 
 export default function ProtectedSetup() {
     const navigate = useNavigate();
@@ -11,6 +12,7 @@ export default function ProtectedSetup() {
     const [error, setError] = useState("");
     const [usbPassword, setUsbPassword] = useState("");
     const [reveal, setReveal] = useState(false);
+    const [copyMessage, setCopyMessage] = useState("");
     const [, update] = useState(0);
     const mounted = useRef(false);
     const opening = useRef(false);
@@ -23,13 +25,30 @@ export default function ProtectedSetup() {
     const deviceId = cloudService.getCurrentDeviceId();
     async function open() {
         if (opening.current) return;
-        opening.current = true; setBusy(true); setError(""); setReveal(false);
+        opening.current = true; setBusy(true); setError(""); setReveal(false); setCopyMessage("");
         try { await protectedSetup.open(); }
         catch (err) { if (mounted.current) setError(err instanceof Error ? err.message : "Unable to open setup."); }
         finally { opening.current = false; if (mounted.current) { setBusy(false); update(value => value + 1); } }
     }
+    async function copySetupPassword() {
+        setCopyMessage("");
+        const current = protectedSetup.details();
+        if (!current) {
+            setCopyMessage("Setup password expired. Open setup again.");
+            return;
+        }
+        try {
+            await Clipboard.write({
+                string: current.password,
+                label: "HonorPole setup password"
+            });
+            if (mounted.current) setCopyMessage("Copied. Paste it into Android Wi-Fi settings.");
+        } catch {
+            if (mounted.current) setCopyMessage("Could not copy the password. Please try again.");
+        }
+    }
     function useUsb() {
-        try { protectedSetup.useUsb(usbPassword); setUsbPassword(""); setError(""); setReveal(false); update(value => value + 1); }
+        try { protectedSetup.useUsb(usbPassword); setUsbPassword(""); setError(""); setReveal(false); setCopyMessage(""); update(value => value + 1); }
         catch (err) { setError(err instanceof Error ? err.message : "Invalid setup password."); }
     }
     return <div className="relative min-h-screen">
@@ -49,10 +68,13 @@ export default function ProtectedSetup() {
                 <p>In Android Wi-Fi settings, join <b>HonorPole-Setup-{session.deviceId}</b> using this setup password. Stay connected when Android warns there is no internet.</p>
                 <input aria-label="Setup Wi-Fi password" readOnly type={reveal ? "text" : "password"} value={session.password}
                     className="w-full p-2 text-sm bg-black/40 rounded" />
+                <button type="button" onClick={copySetupPassword}
+                    className="w-full p-3 bg-blue-600 rounded-xl">Copy setup password</button>
+                <p role="status" aria-live="polite" className="text-sm">{copyMessage}</p>
                 <label className="flex gap-2"><input type="checkbox" checked={reveal} onChange={event => setReveal(event.target.checked)} />Show setup password</label>
                 <p className="text-sm">App credential time remaining: {Math.max(0, Math.ceil((session.expiresAt - Date.now()) / 60000))} minutes. A USB-opened window may close sooner.</p>
                 <button onClick={() => navigate("/setup")} className="w-full p-4 bg-green-600 rounded-xl">I joined setup Wi-Fi — scan networks</button>
-                <button onClick={() => { protectedSetup.clear(); setReveal(false); update(value => value + 1); }} className="w-full p-2 border rounded-xl">Forget setup password</button>
+                <button onClick={() => { protectedSetup.clear(); setReveal(false); setCopyMessage(""); update(value => value + 1); }} className="w-full p-2 border rounded-xl">Forget setup password</button>
             </div>}
             <p className="text-sm">Leaving this page stops waiting for a new request; an already opened setup window closes on the pole's timer. Setup passwords are kept only for this app session.</p>
         </div><BottomNav />
