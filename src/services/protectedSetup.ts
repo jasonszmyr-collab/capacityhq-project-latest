@@ -10,7 +10,7 @@ export const protectedSetup = new ProtectedSetupSession({
             const status = (error as { status?: number })?.status;
             throw new Error(status === 403 ? "Only this pole's administrator can open phone setup. USB setup is also available."
                 : status === 401 ? "Sign in again before opening phone setup."
-                : status === 409 ? "Setup is unavailable. Keep the pole online and idle, close existing setup, and wait for any pending request to expire."
+                : status === 409 ? ((error as { setupReason?: string })?.setupReason ?? "Setup is unavailable. Keep the pole online and idle, close existing setup, and wait for any pending request to expire.")
                 : "Phone setup could not be confirmed. Check the connection and pole before trying again.");
         }
     },

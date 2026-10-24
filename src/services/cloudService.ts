@@ -717,7 +717,20 @@ console.log("Ready.");
                         this.stopCloudTransport();
                     }
                 }
-                throw new CommandHttpError(response.status, body, text);
+                const failure = new CommandHttpError(response.status, body, text);
+                if (response.status === 409 &&
+                    /^\/api\/device\/HP-\d{3,6}\/setup$/.test(endpoint)) {
+                    const reason = (body as { error?: unknown } | null)?.error;
+                    const knownReasons = [
+                        "Phone setup firmware is not available on this pole",
+                        "Pole must be online and idle with no pending command",
+                        "A setup request already exists; wait for it to expire"
+                    ];
+                    if (typeof reason === "string" && knownReasons.includes(reason)) {
+                        Object.assign(failure, { setupReason: reason });
+                    }
+                }
+                throw failure;
             }
 
             const result = await response.json();
