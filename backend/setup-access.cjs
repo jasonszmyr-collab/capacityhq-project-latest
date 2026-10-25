@@ -1,4 +1,5 @@
 'use strict';
+
 const crypto = require('node:crypto');
 const ID = /^HP-[0-9]{3,6}$/;
 const HEX = /^[0-9A-F]{32}$/;
@@ -44,7 +45,15 @@ function createSetupAccess({getState, now = Date.now, random = () =>
     const b = boards.get(id);
     if (!b || now() - b.seen >= 10000) return res.status(409).json({success:false, error:'Phone setup firmware is not available on this pole'});
     if (!idle(id)) return res.status(409).json({success:false, error:'Pole must be online and idle with no pending command'});
-    if (sessions.has(id)) return res.status(409).json({success:false, error:'A setup request already exists; wait for it to expire'});
+    if (sessions.has(id)) {
+      const existing = sessions.get(id);
+      return res.status(409).json({
+        success:false,
+        error:'A setup request already exists; wait for it to expire',
+        setupState:existing.result,
+        remainingMs:Math.max(0, Math.min(600000, existing.expires - now()))
+      });
+    }
     if (sessions.size >= 1000) return res.status(503).json({success:false, error:'Setup capacity reached'});
     const s = {deviceId:id, boot:b.boot, requestId:random(), password:random(),
       deadline:(b.clock + REQUEST_MS) >>> 0, owner:req.user.id,
