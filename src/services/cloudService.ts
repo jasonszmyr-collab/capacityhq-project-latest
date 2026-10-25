@@ -294,6 +294,8 @@ class CloudService
 
     private userId: string | null = null;
     private authRevision = 0;
+    // Local setup credentials follow login identity, not access-token rotation.
+    private setupAuthRevision = 0;
     private connectionRequested = false;
     private authBlocked = false;
     private sessionRecovery: (() => Promise<boolean>) | null = null;
@@ -523,6 +525,7 @@ console.log("Ready.");
         if (!token || !userId) { this.clearAuthentication(); return; }
         if (this.userId && this.userId !== userId) this.clearAuthentication();
         const changed = this.authToken !== token || this.userId !== userId;
+        if (this.userId !== userId) this.setupAuthRevision++;
         this.authToken = token;
         this.userId = userId;
         localStorage.setItem("cloud_auth_token", token);
@@ -550,11 +553,15 @@ console.log("Ready.");
     public setUserId(userId: string): void
     {
         if (this.authToken) this.setAuthentication(this.authToken, userId);
-        else { this.userId = userId; localStorage.setItem("cloud_user_id", userId); }
+        else {
+            if (this.userId !== userId) this.setupAuthRevision++;
+            this.userId = userId; localStorage.setItem("cloud_user_id", userId);
+        }
     }
 
     public clearAuthentication(): void
     {
+        this.setupAuthRevision++;
         this.authRevision++;
         this.authToken = null;
         this.refreshToken = null;
@@ -813,7 +820,7 @@ console.log("Ready.");
     //------------------------------------------------------
 
     public getProtectedSetupScope(): string {
-        return `${this.userId ?? ""}:${this.authRevision}:${this.selectionRevision}:${this.currentDeviceId ?? ""}`;
+        return `${this.userId ?? ""}:${this.setupAuthRevision}:${this.selectionRevision}:${this.currentDeviceId ?? ""}`;
     }
 
     public async requestProtectedSetup(deviceId: string, requestId?: string): Promise<unknown> {
