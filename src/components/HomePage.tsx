@@ -604,7 +604,10 @@ const HomePage = () =>
 
     const [commandNotice, setCommandNotice] = useState<string | null>(null);
     const [commandError, setCommandError] = useState<string | null>(null);
-    const { trackCommand, cancelCommandTracking } = useCommandDelivery(selectedDeviceId, setCommandNotice);
+    const { trackCommand, cancelCommandTracking } = useCommandDelivery(selectedDeviceId, setCommandNotice, message => {
+        setCommandNotice(null);
+        setCommandError(message);
+    });
     useEffect(() => { setCommandNotice(null); setCommandError(null); }, [selectedDeviceId]);
 
     //------------------------------------------------------------------

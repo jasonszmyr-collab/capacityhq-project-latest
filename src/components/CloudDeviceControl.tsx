@@ -40,7 +40,10 @@ export default function CloudDeviceControl()
     const [error, setError] = useState<string | null>(null);
     const [commandError, setCommandError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
-    const { trackCommand, cancelCommandTracking } = useCommandDelivery(selectedDevice, setSuccess);
+    const { trackCommand, cancelCommandTracking } = useCommandDelivery(selectedDevice, setSuccess, message => {
+        setSuccess(null);
+        setCommandError(message);
+    });
     const [showPairing, setShowPairing] = useState(false);
 
     const selectedDeviceInfo =
