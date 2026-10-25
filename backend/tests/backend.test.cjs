@@ -80,3 +80,88 @@ test('WebSocket viewer connects only to authorized device',async()=>{const h=har
 test('shared viewer cannot command another pole',async()=>{const h=harness({role:'viewer'});assert.equal((await h.request('POST','/api/device/:deviceId/command',{headers:auth,params:{deviceId:'HP-001'},body:{command:'FULL'}})).code,403);assert.equal(h.commandsByDevice.size,0)});
 test('membership for another user cannot authorize commands',async()=>{const h=harness({fetch:async url=>({ok:true,json:async()=>url.endsWith('/auth/v1/user')?{id:'user-fixture'}:[{device_id:'HP-004',user_id:'other-user',role:'admin'}]})});assert.equal((await send(h)).code,403);assert.equal(h.commandsByDevice.size,0)});
 test('shared viewer cannot create share codes',async()=>{const h=harness({role:'viewer'});assert.equal((await h.request('POST','/api/device/:deviceId/share',{headers:auth,params:{deviceId:'HP-004'}})).code,403);assert.equal(h.calls.length,2);assert.equal(h.commandsByDevice.size,0)});
+
+// Device acceptance results remain distinct from delivery and movement.
+async function deliveredResultFixture(options={}) {
+ const h=harness(options);
+ const queued=await send(h);assert.equal(queued.code,200);
+ const commandId=queued.data.commandId;
+ await h.request('GET','/control',{headers:device,query:{deviceId:'HP-004'}});
+ const body={deviceId:'HP-004',commandId,command:'FULL',accepted:false,
+  code:'calibration_required',message:'Calibration required before motion'};
+ const post=(changes={},headers=device)=>h.request('POST','/command/result',{headers,body:{...body,...changes}});
+ return {h,body,post};
+}
+
+test('firmware result cannot be submitted anonymously or with a user token',async()=>{
+ const {h,post}=await deliveredResultFixture();
+ for(const headers of [{},auth,{'x-device-secret':'wrong'}])assert.equal((await post({},headers)).code,401);
+ assert.equal(h.getDeviceState('HP-004').commandResult,null);
+});
+test('firmware result authentication never uses the legacy telemetry bypass',async()=>{
+ const h=harness({env:{DEVICE_REGISTRY_ENABLED:'false',LEGACY_TELEMETRY_DEVICE_IDS:'HP-001'}});
+ const r=await h.request('POST','/command/result',{body:{deviceId:'HP-001',commandId:'cmd-test-1',command:'FULL',accepted:true,code:'motion_started',message:'Motion started'}});
+ assert.equal(r.code,401);
+});
+test('firmware result cannot precede poll delivery',async()=>{
+ const h=harness();const q=await send(h);
+ const r=await h.request('POST','/command/result',{headers:device,body:{deviceId:'HP-004',commandId:q.data.commandId,command:'FULL',accepted:false,code:'calibration_required',message:'Calibration required'}});
+ assert.equal(r.code,409);assert.equal(h.getDeviceState('HP-004').commandPending,true);assert.equal(h.getDeviceState('HP-004').commandResult,null);
+});
+test('firmware refusal is correlated and visible to the authorized reader',async()=>{
+ const {h,body,post}=await deliveredResultFixture();const before={...h.getDeviceState('HP-004')};
+ const r=await post();assert.equal(r.code,200);assert.equal(r.data.result.stage,'rejected');assert.equal(r.data.duplicate,false);
+ const view=await h.request('GET','/api/device/:deviceId/status',{headers:auth,params:{deviceId:'HP-004'}});
+ assert.equal(view.code,200);assert.equal(view.data.command.result.commandId,body.commandId);assert.equal(view.data.command.result.code,'calibration_required');
+ const state=h.getDeviceState('HP-004');
+ for(const k of ['position','target','motor','status','calibrated','commandPending','commandDeliveredAt'])assert.equal(state[k],before[k],k);
+ assert.equal(h.getDeviceState('HP-001').commandResult,null);
+});
+test('firmware accepted start never becomes completed movement',async()=>{
+ const {h,post}=await deliveredResultFixture();const r=await post({accepted:true,code:'motion_started',message:'Motion started; arrival unconfirmed'});
+ assert.equal(r.code,200);assert.equal(r.data.result.stage,'accepted');assert.equal(h.getDeviceState('HP-004').status,'delivered');
+ await h.request('POST','/status',{headers:device,body:{deviceId:'HP-004',mode:'IDLE',moving:false}});
+ assert.equal(h.getDeviceState('HP-004').status,'idle');assert.equal(h.getDeviceState('HP-004').commandResult.stage,'accepted');
+ assert.equal('completedAt' in r.data.result,false);
+});
+test('identical firmware result retry preserves first timestamp',async()=>{
+ const {h,post}=await deliveredResultFixture();const first=await post();h.tick(1000);const again=await post();
+ assert.equal(again.code,200);assert.equal(again.data.duplicate,true);assert.equal(again.data.result.receivedAt,first.data.result.receivedAt);
+});
+test('conflicting firmware result retry cannot rewrite first result',async()=>{
+ const {h,post}=await deliveredResultFixture();await post();
+ assert.equal((await post({accepted:true})).code,409);assert.equal((await post({code:'different_reason'})).code,409);
+ assert.equal((await post({message:'Different result'})).code,409);assert.equal(h.getDeviceState('HP-004').commandResult.accepted,false);
+});
+test('superseded command result cannot attach to a newer command',async()=>{
+ const {h,post}=await deliveredResultFixture();await post();const next=await send(h,{command:'STOP'});assert.equal(next.code,200);
+ assert.equal(h.getDeviceState('HP-004').commandResult,null);assert.equal((await post()).code,409);assert.equal(h.getDeviceState('HP-004').commandPending,true);
+});
+test('wrong command and unknown command ID cannot attach a receipt',async()=>{
+ const {h,post}=await deliveredResultFixture();assert.equal((await post({command:'HALF'})).code,409);assert.equal((await post({commandId:'cmd-other-123'})).code,409);assert.equal(h.getDeviceState('HP-004').commandResult,null);
+});
+test('device secret cannot acknowledge another pole command',async()=>{
+ const {h,post}=await deliveredResultFixture();assert.equal((await post({deviceId:'HP-001'})).code,401);assert.equal(h.getDeviceState('HP-004').commandResult,null);
+});
+test('conflicting device ID fields are rejected before receipt handling',async()=>{
+ const {h,post}=await deliveredResultFixture();assert.equal((await post({device_id:'HP-001'})).code,400);assert.equal(h.getDeviceState('HP-004').commandResult,null);
+});
+for(const [name,changes] of [
+ ['nonboolean accepted',{accepted:'false'}],['missing accepted',{accepted:undefined}],
+ ['null accepted',{accepted:null}],['nonstring code',{code:42}],['invalid code',{code:'Bad code'}],
+ ['oversize code',{code:'x'.repeat(65)}],['nonstring message',{message:{}}],['empty message',{message:' '}],
+ ['oversize message',{message:'x'.repeat(241)}],['control message',{message:'line\nbreak'}],
+ ['nonstring ID',{commandId:22}],['oversize ID',{commandId:'cmd-'+ 'x'.repeat(76)}],
+ ['invalid ID',{commandId:'not-a-command-id'}],['unsupported command',{command:'BOGUS'}]
+])test('invalid firmware result rejected: '+name,async()=>{
+ const {h,post}=await deliveredResultFixture();assert.equal((await post(changes)).code,400);assert.equal(h.getDeviceState('HP-004').commandResult,null);
+});
+test('result cannot fabricate a command after server restart',async()=>{
+ const h=harness();const r=await h.request('POST','/command/result',{headers:device,body:{deviceId:'HP-004',commandId:'cmd-before-restart-1',command:'FULL',accepted:true,code:'motion_started',message:'Motion started'}});
+ assert.equal(r.code,409);assert.equal(h.commandsByDevice.size,0);
+});
+test('telemetry cannot inject a result or alter the authenticated receipt',async()=>{
+ const {h,post}=await deliveredResultFixture();await post();const before=h.getDeviceState('HP-004').commandResult;
+ await h.request('POST','/status',{headers:device,body:{deviceId:'HP-004',mode:'IDLE',moving:false,commandResult:{accepted:true,stage:'completed'}}});
+ assert.equal(h.getDeviceState('HP-004').commandResult,before);
+});

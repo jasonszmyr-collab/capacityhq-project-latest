@@ -116,3 +116,17 @@ test('closing during authorization cannot send a late telemetry frame',()=>isola
  const done=closed(c.ws);c.ws.close();await done;release();await pending;
  assert.equal(c.frames.length,1);
 }));
+
+test('real HTTP device receipt is authenticated, correlated, retry-safe and readable',()=>isolated(async h=>{
+ const device={'x-device-secret':'local-device-fixture'};
+ const queued=await h.request('/api/device/HP-004/command',{command:'FULL'},viewer);assert.equal(queued.code,200);
+ const body={deviceId:'HP-004',commandId:queued.data.commandId,command:'FULL',accepted:false,code:'calibration_required',message:'Calibration required before motion'};
+ assert.equal((await h.request('/command/result',body)).code,401);
+ assert.equal((await h.request('/command/result',body,device)).code,409);
+ await h.request('/control?device_id=HP-004',null,device);
+ const receipt=await h.request('/command/result',body,device);assert.equal(receipt.code,200);assert.equal(receipt.data.result.stage,'rejected');
+ assert.equal((await h.request('/command/result',body,device)).data.duplicate,true);
+ assert.equal((await h.request('/command/result',{...body,accepted:true},device)).code,409);
+ const status=await h.request('/api/device/HP-004/status',null,viewer);assert.equal(status.data.command.result.code,'calibration_required');assert.equal(status.data.command.result.commandId,queued.data.commandId);
+ assert.equal((await h.request('/api/device/HP-004/status')).code,401);
+}));

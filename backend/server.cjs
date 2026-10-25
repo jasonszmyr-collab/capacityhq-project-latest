@@ -327,7 +327,8 @@ function createDeviceState(deviceId) {
     commandId: null,
     commandSource: null,
     commandCreatedAt: null,
-    commandDeliveredAt: null
+    commandDeliveredAt: null,
+    commandResult: null
   };
 }
 
@@ -589,13 +590,15 @@ function queueCommand(deviceId, command, source = "MANUAL") {
   targetState.commandSource = source;
   targetState.commandCreatedAt = now;
   targetState.commandDeliveredAt = null;
+  targetState.commandResult = null;
 
   commandsByDevice.set(targetDeviceId, {
     commandId,
     motor,
     source,
     createdAt: now,
-    deliveredAt: null
+    deliveredAt: null,
+    result: null
   });
 
   console.log("------------------------------------");
@@ -949,6 +952,65 @@ app.get("/control", factoryRegistry.requireTelemetryAuth, (req, res) => {
 
     broadcastState(deviceId);
   }
+});
+
+// =========================================================
+// FIRMWARE COMMAND ACCEPTANCE RESULTS
+// Delivery, firmware acceptance and completed movement are separate facts.
+// =========================================================
+
+app.post("/command/result", factoryRegistry.requirePairingAuth, (req, res) => {
+  const body = req.body || {};
+  const deviceId = req.deviceId;
+  if (!/^HP-[0-9]{3,6}$/.test(deviceId || "")) {
+    return res.status(401).json({success: false, error: "Device authentication required"});
+  }
+  const command = normalizeCommand(body.command);
+  if (typeof body.commandId !== "string" ||
+      !/^cmd-[a-z0-9-]{1,75}$/.test(body.commandId) ||
+      !command || typeof body.accepted !== "boolean" ||
+      typeof body.code !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(body.code) ||
+      typeof body.message !== "string" || !body.message.trim() ||
+      body.message.length > 240 || /[\x00-\x1F\x7F]/.test(body.message)) {
+    return res.status(400).json({success: false, error: "Invalid firmware command result"});
+  }
+
+  const state = getDeviceState(deviceId);
+  const stored = commandsByDevice.get(deviceId);
+  // Never attach another device's or an older command's receipt to this state.
+  // A receipt cannot turn a queued command into a delivered one.
+  if (!stored || stored.commandId !== body.commandId ||
+      state.commandId !== body.commandId || stored.motor !== command ||
+      state.commandPending || !Number.isFinite(stored.deliveredAt) ||
+      stored.deliveredAt <= 0) {
+    return res.status(409).json({success: false, error: "No matching delivered command"});
+  }
+
+  const result = {
+    commandId: body.commandId,
+    command,
+    accepted: body.accepted,
+    stage: body.accepted ? "accepted" : "rejected",
+    code: body.code,
+    message: body.message.trim()
+  };
+  if (stored.result) {
+    const same = ["commandId", "command", "accepted", "stage", "code", "message"]
+      .every(key => stored.result[key] === result[key]);
+    if (!same) {
+      return res.status(409).json({success: false, error: "Conflicting firmware command result"});
+    }
+    return res.json({success: true, duplicate: true, commandId: body.commandId,
+      result: stored.result});
+  }
+
+  result.receivedAt = Date.now();
+  stored.result = result;
+  state.commandResult = result;
+  // Do not change telemetry-derived motor state, position, calibration or status.
+  // An accepted start is never promoted to completed movement by this route.
+  broadcastState(deviceId);
+  return res.json({success: true, duplicate: false, commandId: body.commandId, result});
 });
 
 // =========================================================
@@ -1845,7 +1907,9 @@ const state = getDeviceState(deviceId);
           state.commandCreatedAt,
 
         deliveredAt:
-          state.commandDeliveredAt
+          state.commandDeliveredAt,
+
+        result: state.commandResult || null
       },
 
       network: {
