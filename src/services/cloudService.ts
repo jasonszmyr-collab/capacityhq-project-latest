@@ -29,6 +29,7 @@ import { DefaultTelemetry } from "../types/telemetry";
 
 import { discovery } from "./deviceDiscovery";
 import { requireLocalIdentity, LocalIdentityError } from "./localDeviceIdentity";
+import { setupReservationMessage } from "./setupReservationMessage";
 import { CapacitorHttp } from "@capacitor/core";
 import { Preferences } from "@capacitor/preferences";
 import { commandReply, commandFailure, CommandHttpError, type CommandDispatchResult } from "./commandResponse";
@@ -734,7 +735,7 @@ console.log("Ready.");
                         "A setup request already exists; wait for it to expire"
                     ];
                     if (typeof reason === "string" && knownReasons.includes(reason)) {
-                        Object.assign(failure, { setupReason: reason });
+                        Object.assign(failure, { setupReason: setupReservationMessage(body) ?? reason });
                     }
                 }
                 throw failure;
