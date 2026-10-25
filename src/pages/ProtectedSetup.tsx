@@ -16,6 +16,7 @@ export default function ProtectedSetup() {
     const [, update] = useState(0);
     const mounted = useRef(false);
     const opening = useRef(false);
+    const requestVersion = useRef(0);
     useEffect(() => {
         mounted.current = true;
         const timer = setInterval(() => update(value => value + 1), 1000);
@@ -25,10 +26,11 @@ export default function ProtectedSetup() {
     const deviceId = cloudService.getCurrentDeviceId();
     async function open() {
         if (opening.current) return;
+        const version = ++requestVersion.current;
         opening.current = true; setBusy(true); setError(""); setReveal(false); setCopyMessage("");
         try { await protectedSetup.open(); }
-        catch (err) { if (mounted.current) setError(err instanceof Error ? err.message : "Unable to open setup."); }
-        finally { opening.current = false; if (mounted.current) { setBusy(false); update(value => value + 1); } }
+        catch (err) { if (mounted.current && version === requestVersion.current) setError(err instanceof Error ? err.message : "Unable to open setup."); }
+        finally { if (version === requestVersion.current) { opening.current = false; if (mounted.current) { setBusy(false); update(value => value + 1); } } }
     }
     async function copySetupPassword() {
         setCopyMessage("");
@@ -48,7 +50,7 @@ export default function ProtectedSetup() {
         }
     }
     function useUsb() {
-        try { protectedSetup.useUsb(usbPassword); setUsbPassword(""); setError(""); setReveal(false); setCopyMessage(""); update(value => value + 1); }
+        try { protectedSetup.useUsb(usbPassword); ++requestVersion.current; opening.current = false; setBusy(false); setUsbPassword(""); setError(""); setReveal(false); setCopyMessage(""); update(value => value + 1); }
         catch (err) { setError(err instanceof Error ? err.message : "Invalid setup password."); }
     }
     return <div className="relative min-h-screen">
@@ -59,10 +61,15 @@ export default function ProtectedSetup() {
             <button disabled={busy || !deviceId} onClick={open} className="w-full p-4 bg-blue-600 rounded-xl disabled:opacity-50">
                 {busy ? "Waiting for the pole to open setup..." : "Open protected setup"}
             </button>
+            {busy && <button onClick={() => {
+                protectedSetup.cancelPending(); ++requestVersion.current;
+                opening.current = false; setBusy(false); setError("");
+            }} className="w-full p-3 border rounded-xl">Stop waiting — use USB setup password</button>}
+            <p className="text-sm">Stopping the wait does not close setup or cancel a request already sent to the pole. Use the current password from USB SETUP; do not send another cloud opening request while one is pending.</p>
             <p className="text-sm">For USB setup, send SETUP in Serial Monitor and enter the setup password printed there. This is separate from your home Wi-Fi password.</p>
             <input aria-label="USB setup password" type="password" autoComplete="off" value={usbPassword}
                 onChange={event => setUsbPassword(event.target.value)} className="w-full p-3 bg-white/10 rounded-xl" />
-            <button disabled={busy || !deviceId} onClick={useUsb} className="w-full p-3 border rounded-xl disabled:opacity-50">Use USB setup password</button>
+            <button disabled={!deviceId} onClick={useUsb} className="w-full p-3 border rounded-xl disabled:opacity-50">Use USB setup password</button>
             {error && <p role="alert" className="text-red-400">{error}</p>}
             {session && <div className="space-y-4 p-4 bg-white/10 rounded-xl">
                 <p>In Android Wi-Fi settings, join <b>HonorPole-Setup-{session.deviceId}</b> using this setup password. Stay connected when Android warns there is no internet.</p>

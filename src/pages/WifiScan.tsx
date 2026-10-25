@@ -4,10 +4,8 @@ import { useNavigate } from "react-router-dom";
 import AppHeader from "../components/AppHeader";
 import BottomNav from "../components/BottomNav";
 
-import {
-  wifiService,
-  type WiFiNetwork
-} from "../services/wifiService";
+import type { WiFiNetwork } from "../services/wifiService";
+import { protectedSetup } from "../services/protectedSetup";
 
 import { WiFiScanError } from "../services/wifiScanResponse";
 
@@ -37,7 +35,7 @@ export default function WifiScan() {
     setIsHonorPoleConnected(false);
     setDeviceReachable(false);
     try {
-      const result = await wifiService.scanNetworks();
+      const result = await protectedSetup.scan();
       if (!current()) return;
       const filtered = result
         .filter(n => n.ssid !== "HonorPole-Setup" && !n.ssid.startsWith("HonorPole-Setup-"))
@@ -48,11 +46,11 @@ export default function WifiScan() {
       setEmptyScan(filtered.length === 0);
     } catch (err) {
       if (!current()) return;
-      // A rejected or malformed HTTP reply still establishes reachability.
-      const reached = err instanceof WiFiScanError && err.code !== "unreachable";
-      setIsHonorPoleConnected(reached);
-      setDeviceReachable(reached);
+      // A response alone does not confirm the selected pole or a usable scan.
+      setIsHonorPoleConnected(false);
+      setDeviceReachable(false);
       setError(err instanceof WiFiScanError ? err.message
+        : err instanceof Error ? err.message
         : "Unable to scan Wi-Fi networks. Check the connection and press Refresh Networks to try again.");
     } finally {
       if (current()) {

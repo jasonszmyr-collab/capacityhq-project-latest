@@ -1,3 +1,5 @@
+import { readWiFiScanResponse, WiFiScanError } from "./wifiScanResponse";
+
 export interface SetupContext { deviceId: string | null; scope: string; }
 export interface SetupSession {
     deviceId: string; scope: string; password: string; expiresAt: number;
@@ -6,7 +8,7 @@ interface Reply { status: number; data: unknown; }
 export interface SetupDependencies {
     context(): SetupContext;
     cloud(deviceId: string, requestId?: string): Promise<unknown>;
-    local(path: "/status" | "/save", headers?: Record<string, string>, data?: unknown): Promise<Reply>;
+    local(path: "/status" | "/scan" | "/save", headers?: Record<string, string>, data?: unknown): Promise<Reply>;
     now(): number;
     pause(): Promise<void>;
     encode(value: string): string;
@@ -44,9 +46,9 @@ export class ProtectedSetupSession {
         return this.session ? { ...this.session } : null;
     }
     useUsb(password: string) {
-        this.clear();
         const context = this.context();
         if (!hex(password)) throw new Error("Enter the 32-character setup password from USB SETUP, using uppercase letters and digits.");
+        this.clear();
         this.session = { deviceId: context.deviceId!, scope: context.scope, password, expiresAt: this.deps.now() + 600000 };
     }
     async open(): Promise<void> {
@@ -80,6 +82,30 @@ export class ProtectedSetupSession {
         } catch (error) {
             if (generation === this.generation) this.session = null;
             throw error;
+        }
+    }
+    async scan() {
+        const context = this.context(), generation = this.generation;
+        try {
+            // Setup scanning uses only the AP address, never a cached LAN pole or mDNS.
+            // Verify identity before asking that AP to scan. No credentials are sent.
+            const response = await this.deps.local("/status");
+            this.current(context, generation);
+            if (response.status !== 200) throw new WiFiScanError("request",
+                "The setup address did not confirm the pole. Reconnect to its setup Wi-Fi and refresh.");
+            const status = object(response.data);
+            const identities = [status.deviceId, status.serialNumber, status.device_id].filter(value => value !== undefined);
+            if (status.success === false || status.error || !identities.length ||
+                identities.some(value => value !== context.deviceId)) {
+                throw new WiFiScanError("invalid", "This setup network did not identify the selected HonorPole. Select the matching pole and reconnect to its setup Wi-Fi.");
+            }
+            const result = await this.deps.local("/scan");
+            this.current(context, generation);
+            return readWiFiScanResponse(result.status, result.data);
+        } catch (error) {
+            if (error instanceof WiFiScanError) throw error;
+            throw new WiFiScanError("unreachable", error instanceof Error ? error.message :
+                "Cannot reach the setup address. Connect to this pole's setup Wi-Fi and refresh.");
         }
     }
     async save(ssid: string, password: string): Promise<void> {
