@@ -46,32 +46,68 @@ export function matchingFirmwareReceipt(payload: unknown, request: DeliveryReque
     return r as unknown as FirmwareReceipt;
 }
 
+export interface DeliveryWatchOptions {
+    intervalMs?: number;
+    timeoutMs?: number;
+    // Total read-only observation window, including the initial timeout.
+    recoveryTimeoutMs?: number;
+    recoveryIntervalMs?: number;
+    onRejected?: (message: string) => void;
+}
+
 export function watchCommandDelivery(
     request: DeliveryRequest,
     read: () => Promise<unknown>,
     notify: (message: string) => void,
     isCurrent: () => boolean,
-    options: { intervalMs?: number; timeoutMs?: number; onRejected?: (message: string) => void } = {}
+    options: DeliveryWatchOptions = {}
 ): () => void {
     let active = true;
     let deliveryReported = false;
+    let recovering = false;
     let next: ReturnType<typeof setTimeout> | undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let recoveryDeadline: ReturnType<typeof setTimeout> | undefined;
+    const timeoutMs = options.timeoutMs ?? 30000;
+    const totalMs = Math.max(timeoutMs, options.recoveryTimeoutMs ?? timeoutMs);
+    const canRecover = totalMs > timeoutMs;
+    const expiresAt = Date.now() + totalMs;
     const label = request.command.toUpperCase();
-    const cancel = () => { active = false; clearTimeout(deadline); clearTimeout(next); };
-    const deadline = setTimeout(() => {
-        if (active && isCurrent()) {
-            notify(deliveryReported
-                ? `Server reports ${label} delivered to ${request.deviceId}. Board acceptance is still not confirmed.`
-                : `${label} delivery to ${request.deviceId} is not confirmed. Check device status before retrying.`);
-        }
+    const cancel = () => {
+        active = false;
+        clearTimeout(deadline);
+        clearTimeout(recoveryDeadline);
+        clearTimeout(next);
+    };
+    const uncertainty = () => deliveryReported
+        ? `Server reports ${label} delivered to ${request.deviceId}. Board acceptance is still not confirmed.`
+        : `${label} delivery to ${request.deviceId} is not confirmed.`;
+    const finishUnconfirmed = () => {
+        if (active && isCurrent()) notify(`${uncertainty()} Receipt checking has ended. Check device status before retrying.`);
         cancel();
-    }, options.timeoutMs ?? 30000);
+    };
+    // Check wall time as well as timers: Android can suspend timers in background.
+    const current = () => {
+        if (!active) return false;
+        if (!isCurrent()) { cancel(); return false; }
+        if (Date.now() >= expiresAt) { finishUnconfirmed(); return false; }
+        return true;
+    };
+    deadline = setTimeout(() => {
+        if (!current()) return;
+        if (!canRecover) { finishUnconfirmed(); return; }
+        recovering = true;
+        notify(`${uncertainty()} Checking for its receipt; no new command will be sent.`);
+        // Keep the one existing read chain alive; never start overlapping polls.
+    }, timeoutMs);
+    if (canRecover) recoveryDeadline = setTimeout(finishUnconfirmed, totalMs);
 
     async function poll() {
-        if (!active || !isCurrent()) { cancel(); return; }
+        if (!current()) return;
         try {
+            // This callback reads status only. It must never dispatch a command.
             const payload = await read();
-            if (!active || !isCurrent()) { cancel(); return; }
+            if (!current()) return;
             const receipt = matchingFirmwareReceipt(payload, request);
             if (receipt) {
                 if (receipt.accepted) {
@@ -84,14 +120,15 @@ export function watchCommandDelivery(
             }
             if (!deliveryReported && hasMatchingDelivery(payload, request)) {
                 deliveryReported = true;
-                notify(`Server reports ${label} delivered to ${request.deviceId}. Board acceptance is not confirmed.`);
-                // Keep polling; a later matching firmware result is a separate fact.
+                notify(`Server reports ${label} delivered to ${request.deviceId}. Board acceptance is not confirmed.` +
+                    (recovering ? " Checking for its receipt; no new command will be sent." : ""));
             }
         } catch {
-            // A failed read cannot establish acceptance; the deadline still applies.
+            // A failed read proves nothing. Keep the original ID, without resending.
         }
-        if (active && isCurrent()) next = setTimeout(() => void poll(), options.intervalMs ?? 2000);
-        else cancel();
+        if (current()) next = setTimeout(() => void poll(), recovering
+            ? options.recoveryIntervalMs ?? 5000
+            : options.intervalMs ?? 2000);
     }
     void poll();
     return cancel;

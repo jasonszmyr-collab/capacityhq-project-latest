@@ -29,13 +29,15 @@ export function useCommandDelivery(deviceId: string | null, onMessage: (message:
             return;
         }
         const userId = cloudService.getUserId();
+        const scope = cloudService.getCommandTrackingScope();
         cancelRef.current = watchCommandDelivery(
             { deviceId: requestedDevice, commandId: result.commandId, command },
             () => cloudService.getCommandDeliveryStatus(requestedDevice),
             onMessage,
             () => mounted.current && currentDevice.current === requestedDevice &&
-                cloudService.getUserId() === userId && cloudService.isAuthenticated(),
-            { onRejected }
+                cloudService.getUserId() === userId && cloudService.isAuthenticated() &&
+                cloudService.getCommandTrackingScope() === scope,
+            { onRejected, recoveryTimeoutMs: 5 * 60_000 }
         );
     }
 

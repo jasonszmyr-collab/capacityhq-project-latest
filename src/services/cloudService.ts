@@ -820,6 +820,11 @@ console.log("Ready.");
 
     //------------------------------------------------------
 
+    // Token refresh preserves this scope; sign-out, account and selection changes do not.
+    public getCommandTrackingScope(): string {
+        return this.getProtectedSetupScope();
+    }
+
     public getProtectedSetupScope(): string {
         return `${this.userId ?? ""}:${this.setupAuthRevision}:${this.selectionRevision}:${this.currentDeviceId ?? ""}`;
     }
