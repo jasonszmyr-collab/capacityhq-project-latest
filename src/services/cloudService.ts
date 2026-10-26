@@ -556,6 +556,8 @@ console.log("Ready.");
         localStorage.setItem("cloud_refresh_token", token);
     }
     public getUserId(): string | null { return this.userId; }
+    // Stable across token refresh and pole selection; changes at login boundaries.
+    public getDeviceListScope(): string { return `${this.userId ?? ""}:${this.setupAuthRevision}`; }
     public setUserId(userId: string): void
     {
         if (this.authToken) this.setAuthentication(this.authToken, userId);
@@ -886,12 +888,14 @@ console.log("Ready.");
         );
     }
 
+    const scope = this.getDeviceListScope();
     try
     {
         const devices =
             await this.request<DeviceInfo[]>(
                 "/api/devices"
             );
+        if (scope !== this.getDeviceListScope()) throw new Error("Login changed while loading HonorPoles.");
 
         devices.forEach(device =>
         {
