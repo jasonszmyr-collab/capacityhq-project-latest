@@ -409,6 +409,11 @@ const telemetry =
                 this.connectionMode =
                     "offline";
 
+                // Control subscribes to telemetry; a connection-only notice leaves
+                // its old Online badge and travel eligibility visible after failure.
+                this.telemetry.online = false;
+                this.telemetry.network.websocketConnected = false;
+                this.notifyTelemetrySubscribers();
                 this.notifyConnectionSubscribers(
                     false
                 );
@@ -1703,6 +1708,7 @@ this.notifyTelemetrySubscribers();
             socket.onclose = event => {
                 if (!current()) return;
                 this.socket = null;
+                this.telemetry.online = false;
                 this.telemetry.network.websocketConnected = false;
                 this.stopHeartbeat();
                 this.connected = false;
