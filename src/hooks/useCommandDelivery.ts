@@ -3,7 +3,7 @@ import cloudService from "../services/cloudService";
 import type { CommandDispatchResult } from "../services/commandResponse";
 import { watchCommandDelivery } from "../services/commandDelivery";
 
-export function useCommandDelivery(deviceId: string | null, onMessage: (message: string) => void) {
+export function useCommandDelivery(deviceId: string | null, onMessage: (message: string) => void, onRejected?: (message: string) => void) {
     const currentDevice = useRef(deviceId);
     currentDevice.current = deviceId;
     const cancelRef = useRef<(() => void) | null>(null);
@@ -29,12 +29,15 @@ export function useCommandDelivery(deviceId: string | null, onMessage: (message:
             return;
         }
         const userId = cloudService.getUserId();
+        const scope = cloudService.getCommandTrackingScope();
         cancelRef.current = watchCommandDelivery(
             { deviceId: requestedDevice, commandId: result.commandId, command },
             () => cloudService.getCommandDeliveryStatus(requestedDevice),
             onMessage,
             () => mounted.current && currentDevice.current === requestedDevice &&
-                cloudService.getUserId() === userId && cloudService.isAuthenticated()
+                cloudService.getUserId() === userId && cloudService.isAuthenticated() &&
+                cloudService.getCommandTrackingScope() === scope,
+            { onRejected, recoveryTimeoutMs: 5 * 60_000 }
         );
     }
 

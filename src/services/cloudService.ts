@@ -29,6 +29,7 @@ import { DefaultTelemetry } from "../types/telemetry";
 
 import { discovery } from "./deviceDiscovery";
 import { requireLocalIdentity, LocalIdentityError } from "./localDeviceIdentity";
+import { setupReservationMessage } from "./setupReservationMessage";
 import { CapacitorHttp } from "@capacitor/core";
 import { Preferences } from "@capacitor/preferences";
 import { commandReply, commandFailure, CommandHttpError, type CommandDispatchResult } from "./commandResponse";
@@ -294,6 +295,8 @@ class CloudService
 
     private userId: string | null = null;
     private authRevision = 0;
+    // Local setup credentials follow login identity, not access-token rotation.
+    private setupAuthRevision = 0;
     private connectionRequested = false;
     private authBlocked = false;
     private sessionRecovery: (() => Promise<boolean>) | null = null;
@@ -406,6 +409,11 @@ const telemetry =
                 this.connectionMode =
                     "offline";
 
+                // Control subscribes to telemetry; a connection-only notice leaves
+                // its old Online badge and travel eligibility visible after failure.
+                this.telemetry.online = false;
+                this.telemetry.network.websocketConnected = false;
+                this.notifyTelemetrySubscribers();
                 this.notifyConnectionSubscribers(
                     false
                 );
@@ -523,6 +531,7 @@ console.log("Ready.");
         if (!token || !userId) { this.clearAuthentication(); return; }
         if (this.userId && this.userId !== userId) this.clearAuthentication();
         const changed = this.authToken !== token || this.userId !== userId;
+        if (this.userId !== userId) this.setupAuthRevision++;
         this.authToken = token;
         this.userId = userId;
         localStorage.setItem("cloud_auth_token", token);
@@ -547,14 +556,20 @@ console.log("Ready.");
         localStorage.setItem("cloud_refresh_token", token);
     }
     public getUserId(): string | null { return this.userId; }
+    // Stable across token refresh and pole selection; changes at login boundaries.
+    public getDeviceListScope(): string { return `${this.userId ?? ""}:${this.setupAuthRevision}`; }
     public setUserId(userId: string): void
     {
         if (this.authToken) this.setAuthentication(this.authToken, userId);
-        else { this.userId = userId; localStorage.setItem("cloud_user_id", userId); }
+        else {
+            if (this.userId !== userId) this.setupAuthRevision++;
+            this.userId = userId; localStorage.setItem("cloud_user_id", userId);
+        }
     }
 
     public clearAuthentication(): void
     {
+        this.setupAuthRevision++;
         this.authRevision++;
         this.authToken = null;
         this.refreshToken = null;
@@ -717,7 +732,20 @@ console.log("Ready.");
                         this.stopCloudTransport();
                     }
                 }
-                throw new CommandHttpError(response.status, body, text);
+                const failure = new CommandHttpError(response.status, body, text);
+                if (response.status === 409 &&
+                    /^\/api\/device\/HP-\d{3,6}\/setup$/.test(endpoint)) {
+                    const reason = (body as { error?: unknown } | null)?.error;
+                    const knownReasons = [
+                        "Phone setup firmware is not available on this pole",
+                        "Pole must be online and idle with no pending command",
+                        "A setup request already exists; wait for it to expire"
+                    ];
+                    if (typeof reason === "string" && knownReasons.includes(reason)) {
+                        Object.assign(failure, { setupReason: setupReservationMessage(body) ?? reason });
+                    }
+                }
+                throw failure;
             }
 
             const result = await response.json();
@@ -799,6 +827,25 @@ console.log("Ready.");
 
     //------------------------------------------------------
 
+    // Token refresh preserves this scope; sign-out, account and selection changes do not.
+    public getCommandTrackingScope(): string {
+        return this.getProtectedSetupScope();
+    }
+
+    public getProtectedSetupScope(): string {
+        return `${this.userId ?? ""}:${this.setupAuthRevision}:${this.selectionRevision}:${this.currentDeviceId ?? ""}`;
+    }
+
+    public async requestProtectedSetup(deviceId: string, requestId?: string): Promise<unknown> {
+        const scope = this.getProtectedSetupScope();
+        if (!this.isAuthenticated() || deviceId !== this.currentDeviceId) throw new Error("Select a pole and sign in first.");
+        const endpoint = `/api/device/${encodeURIComponent(deviceId)}/setup` +
+            (requestId ? `/${encodeURIComponent(requestId)}` : "");
+        const result = await this.request<unknown>(endpoint, { method: requestId ? "GET" : "POST" }, false);
+        if (scope !== this.getProtectedSetupScope()) throw new Error("Pole or login changed during setup.");
+        return result;
+    }
+
     public getCurrentDeviceId():
         string | null
     {
@@ -841,12 +888,14 @@ console.log("Ready.");
         );
     }
 
+    const scope = this.getDeviceListScope();
     try
     {
         const devices =
             await this.request<DeviceInfo[]>(
                 "/api/devices"
             );
+        if (scope !== this.getDeviceListScope()) throw new Error("Login changed while loading HonorPoles.");
 
         devices.forEach(device =>
         {
@@ -1663,6 +1712,7 @@ this.notifyTelemetrySubscribers();
             socket.onclose = event => {
                 if (!current()) return;
                 this.socket = null;
+                this.telemetry.online = false;
                 this.telemetry.network.websocketConnected = false;
                 this.stopHeartbeat();
                 this.connected = false;

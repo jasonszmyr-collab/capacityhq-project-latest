@@ -28,7 +28,7 @@ for(const [name,payload,expected] of [
  ['null payload',null,false]
 ])test(name,()=>assert.equal(load(clock()).hasMatchingDelivery(payload,req),expected));
 const flush=async()=>{await Promise.resolve();await Promise.resolve();await Promise.resolve()};
-test('matching delivery updates notice without claiming acceptance',async()=>{const c=clock(),messages=[];load(c).watchCommandDelivery(req,async()=>good,m=>messages.push(m),()=>true);await flush();assert.equal(messages.length,1);assert.match(messages[0],/Server reports STOP delivered/);assert.match(messages[0],/Board acceptance is not confirmed/);assert.equal(c.tasks.size,0)});
+test('matching delivery updates notice without claiming acceptance',async()=>{const c=clock(),messages=[];load(c).watchCommandDelivery(req,async()=>good,m=>messages.push(m),()=>true);await flush();assert.equal(messages.length,1);assert.match(messages[0],/Server reports STOP delivered/);assert.match(messages[0],/Board acceptance is not confirmed/);assert.equal(c.tasks.size,2)});
 test('old record followed by matching record',async()=>{const c=clock(),messages=[];let n=0;load(c).watchCommandDelivery(req,async()=>++n===1?{...good,command:{...good.command,id:'old'}}:good,m=>messages.push(m),()=>true);await flush();assert.equal(messages.length,0);c.run(2000);await flush();assert.equal(messages.length,1)});
 test('deadline ends indefinite waiting',async()=>{const c=clock(),messages=[];load(c).watchCommandDelivery(req,async()=>({}),m=>messages.push(m),()=>true);await flush();c.run(30000);assert.equal(messages.length,1);assert.match(messages[0],/delivery .* is not confirmed/);assert.equal(c.tasks.size,0)});
 test('slow late response cannot override timeout',async()=>{const c=clock(),messages=[];let resolve;load(c).watchCommandDelivery(req,()=>new Promise(r=>resolve=r),m=>messages.push(m),()=>true);c.run(30000);resolve(good);await flush();assert.equal(messages.length,1);assert.match(messages[0],/is not confirmed/)});
@@ -38,7 +38,7 @@ test('unmount/new command cancellation ignores late response',async()=>{const c=
 for(const file of ['src/services/cloudService.ts','src/hooks/useCommandDelivery.ts','src/components/HomePage.tsx','src/components/CloudDeviceControl.tsx'])test(`TypeScript syntax: ${file}`,()=>{const out=ts.transpileModule(fs.readFileSync(path.join(__dirname,'..',file),'utf8'),{fileName:file,reportDiagnostics:true,compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}});assert.equal((out.diagnostics||[]).filter(d=>d.category===ts.DiagnosticCategory.Error).length,0)});
 function hookHarness(){
  const c=clock(),messages=[],refs=[];let index=0,cleanup,device='HP-004',user='user-a';let reads=0;
- const cloud={getUserId:()=>user,isAuthenticated:()=>user!==null,getCommandDeliveryStatus:async id=>{reads++;assert.equal(id,'HP-004');return good}};
+ const cloud={getCommandTrackingScope:()=>`${user}:${device}`,getUserId:()=>user,isAuthenticated:()=>user!==null,getCommandDeliveryStatus:async id=>{reads++;assert.equal(id,'HP-004');return good}};
  const React={useRef:value=>{const i=index++;return refs[i]||(refs[i]={current:value})},useEffect:fn=>{if(!cleanup)cleanup=fn()}};
  const module={exports:{}};
  const hookCode=ts.transpileModule(fs.readFileSync(path.join(__dirname,'../src/hooks/useCommandDelivery.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;

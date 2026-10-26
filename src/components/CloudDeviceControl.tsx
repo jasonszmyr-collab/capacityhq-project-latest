@@ -1,3 +1,4 @@
+import { watchDeviceList } from "../services/deviceListRecovery";
 import { supabase } from "../services/supabaseClient";
 import { useCommandDelivery } from "../hooks/useCommandDelivery";
 import { getPoleCloudStatus, getFirmwareDisplay } from "../services/connectionPresentation";
@@ -29,6 +30,7 @@ import {
 export default function CloudDeviceControl()
 {
     const [devices, setDevices] = useState<DeviceInfo[]>([]);
+    const [deviceListState, setDeviceListState] = useState<"loading" | "retrying" | "ready">("loading");
     const [selectedDevice, setSelectedDevice] = useState<string | null>(
         cloudService.getCurrentDeviceId()
     );
@@ -40,7 +42,10 @@ export default function CloudDeviceControl()
     const [error, setError] = useState<string | null>(null);
     const [commandError, setCommandError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
-    const { trackCommand, cancelCommandTracking } = useCommandDelivery(selectedDevice, setSuccess);
+    const { trackCommand, cancelCommandTracking } = useCommandDelivery(selectedDevice, setSuccess, message => {
+        setSuccess(null);
+        setCommandError(message);
+    });
     const [showPairing, setShowPairing] = useState(false);
 
     const selectedDeviceInfo =
@@ -65,57 +70,24 @@ export default function CloudDeviceControl()
         setSelectedDevice(device.deviceId);
     }
 
-    useEffect(() =>
-    {
-        let mounted = true;
-
-        async function loadDevices()
-        {
-            try
-            {
-                const list = await cloudService.getDevices();
-
-                if (!mounted)
-                {
-                    return;
-                }
-
-                setDevices(list);
-
-                if (list.length === 0)
-                {
-                    setSelectedDevice(null);
-                    return;
-                }
-
-                const currentDeviceId = cloudService.getCurrentDeviceId();
-                const activeDevice =
-                    list.find(device => device.deviceId === currentDeviceId)
-                    ?? list[0];
-
-                cloudService.setDevice(activeDevice);
-                setSelectedDevice(activeDevice.deviceId);
+    useEffect(() => watchDeviceList<DeviceInfo>({
+        load: () => cloudService.getDevices(),
+        getScope: () => cloudService.getDeviceListScope(),
+        onError: () => setDeviceListState("retrying"),
+        onLoaded: list => {
+            setDeviceListState("ready");
+            setDevices(list);
+            if (list.length === 0) {
+                setSelectedDevice(null);
+                return;
             }
-            catch (err)
-            {
-                if (mounted)
-                {
-                    setError(
-                        err instanceof Error
-                            ? err.message
-                            : "Unable to load HonorPoles."
-                    );
-                }
-            }
+            // Read the selection now, so a delayed list never restores an older pole.
+            const currentDeviceId = cloudService.getCurrentDeviceId();
+            const activeDevice = list.find(device => device.deviceId === currentDeviceId) ?? list[0];
+            cloudService.setDevice(activeDevice);
+            setSelectedDevice(activeDevice.deviceId);
         }
-
-        void loadDevices();
-
-        return () =>
-        {
-            mounted = false;
-        };
-    }, []);
+    }), []);
 
     useEffect(() =>
     {
@@ -357,7 +329,7 @@ export default function CloudDeviceControl()
                             className="w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-gray-900"
                         >
                             {devices.length === 0 && (
-                                <option value="">No HonorPoles found</option>
+                                <option value="">{deviceListState === "ready" ? "No HonorPoles found" : deviceListState === "retrying" ? "HonorPole list unavailable" : "Loading HonorPoles..."}</option>
                             )}
 
                             {devices.map(device => (
@@ -405,6 +377,12 @@ export default function CloudDeviceControl()
                             </div>
                         )}
 
+                        {deviceListState === "retrying" && (
+                            <p role="status" className="mt-3 text-sm text-amber-800">
+                                Unable to load assigned HonorPoles. Retrying automatically when the connection is available.
+                            </p>
+                        )}
+
                         {switching && (
                             <p className="mt-3 text-sm text-blue-700">
                                 Loading the selected HonorPole...
@@ -440,7 +418,7 @@ export default function CloudDeviceControl()
                         <div className="flex items-start justify-between gap-4">
                             <div>
                                 <CardTitle>
-                                    {selectedDeviceInfo?.deviceName ?? "No HonorPole selected"}
+                                    {selectedDeviceInfo?.deviceName ?? selectedDevice ?? "No HonorPole selected"}
                                 </CardTitle>
                                 <CardDescription>
                                     {selectedDevice ?? "Select an HonorPole to begin"}

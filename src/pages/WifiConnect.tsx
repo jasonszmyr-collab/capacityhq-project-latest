@@ -1,13 +1,11 @@
 import { useLocation, useNavigate } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 import AppHeader from "../components/AppHeader";
 import BottomNav from "../components/BottomNav";
 
-import {
-  wifiService,
-  type WiFiCredentials
-} from "../services/wifiService";
+import { protectedSetup } from "../services/protectedSetup";
+import cloudService from "../services/cloudService";
 
 export default function WifiConnect() {
 
@@ -18,6 +16,10 @@ export default function WifiConnect() {
 
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const mounted = useRef(false);
+  const submitting = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const [error, setError] = useState<string | null>(null);
 
@@ -39,6 +41,8 @@ export default function WifiConnect() {
 
   const handleConnect = async () => {
 
+    if (submitting.current) return;
+
     if (!network?.ssid) {
 
       setError("No WiFi network selected.");
@@ -47,7 +51,7 @@ export default function WifiConnect() {
 
     }
 
-    if (password.trim().length === 0) {
+    if (network.secure !== false && password.length === 0) {
 
       setError("Please enter the WiFi password.");
 
@@ -55,34 +59,16 @@ export default function WifiConnect() {
 
     }
 
+    submitting.current = true;
     setLoading(true);
     setError(null);
 
     try {
 
-      const credentials: WiFiCredentials = {
-
-        ssid: network.ssid,
-
-        password
-
-      };
-
-      const result =
-        await wifiService.sendCredentials(credentials);
-
-      if (!result.success) {
-
-        setError(
-          result.message ||
-          "Unable to connect HonorPole."
-        );
-
-        setLoading(false);
-
-        return;
-
-      }
+      const deviceId = cloudService.getCurrentDeviceId();
+      await protectedSetup.save(network.ssid, password);
+      if (!mounted.current) return;
+      setPassword("");
 
       //--------------------------------------------------
       // Go to provisioning screen
@@ -92,22 +78,17 @@ export default function WifiConnect() {
         "/wifi/provisioning",
         {
           state: {
-            ssid: network.ssid
+            ssid: network.ssid,
+            deviceId
           }
         }
       );
 
-    } catch (err: any) {
-
-      console.error(err);
-
-      setError(
-        err?.message ||
-        "Failed to communicate with HonorPole."
-      );
-
-      setLoading(false);
-
+    } catch (err: unknown) {
+      if (mounted.current) setError(err instanceof Error ? err.message : "Wi-Fi submission could not be confirmed.");
+    } finally {
+      submitting.current = false;
+      if (mounted.current) setLoading(false);
     }
 
   };
@@ -142,11 +123,17 @@ export default function WifiConnect() {
 
           </div>
 
+          <button disabled={loading} onClick={() => navigate("/wifi/protected")}
+            className="w-full p-3 border border-white/30 rounded-xl">
+            Open protected setup / enter setup password
+          </button>
+
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="WiFi Password"
+            autoComplete="off"
+            placeholder="Home WiFi Password"
             className="w-full p-4 rounded-xl bg-white/10 border border-white/20 text-white placeholder:text-gray-400"
           />
 

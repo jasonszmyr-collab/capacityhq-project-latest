@@ -1,3 +1,4 @@
+import ProtectedSetup from "./pages/ProtectedSetup";
 import "./App.css";
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
@@ -201,6 +202,7 @@ function App() {
         ) : (
           <Routes>
   {/* Wi-Fi setup must remain available without Internet/login */}
+  <Route path="/wifi/protected" element={<ProtectedSetup />} />
   <Route path="/wifi" element={<WifiScan />} />
   <Route path="/setup" element={<WifiScan />} />
   <Route path="/wifi/scan" element={<WifiScan />} />

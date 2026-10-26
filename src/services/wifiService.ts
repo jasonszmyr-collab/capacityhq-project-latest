@@ -1,3 +1,4 @@
+import { readWiFiScanResponse, WiFiScanError } from "./wifiScanResponse";
 import { CapacitorHttp } from "@capacitor/core";
 import { Network } from "@capacitor/network";
 import { Preferences } from "@capacitor/preferences";
@@ -591,102 +592,25 @@ class WiFiService {
        WIFI SCAN
     ====================================================== */
 
-    async scanNetworks():
-        Promise<WiFiNetwork[]> {
-
+    async scanNetworks(): Promise<WiFiNetwork[]> {
         try {
-
-            const device =
-                await this.discoverHonorPole();
-
+            const device = await this.discoverHonorPole();
             if (!device || !this.deviceUrl) {
-
-                return [];
-
+                throw new WiFiScanError("unreachable",
+                    "Cannot reach HonorPole. Connect to this pole's HonorPole-Setup Wi-Fi, then press Refresh Networks.");
             }
-
-            const response =
-                await CapacitorHttp.request({
-
-                    method: "GET",
-
-                    url: `${this.deviceUrl}/scan`,
-
-                    connectTimeout: 20000,
-
-                    readTimeout: 20000
-
-                });
-
-            if (response.status !== 200) {
-
-                return [];
-
-            }
-
-            const networks =
-                response.data?.networks ??
-                response.data ??
-                [];
-
-            return networks
-
-                .filter(
-                    (n: any) =>
-                        n.ssid &&
-                        n.ssid.trim().length > 0
-                )
-
-                .map((n: any) => ({
-
-                    ssid: n.ssid,
-
-                    signal: Math.max(
-
-                        0,
-
-                        Math.min(
-
-                            100,
-
-                            Math.round(
-
-                                ((n.rssi ?? -100) + 100) * 2
-
-                            )
-
-                        )
-
-                    ),
-
-                    secure: Boolean(n.secure)
-
-                }))
-
-                .sort(
-
-                    (a: WiFiNetwork,
-                     b: WiFiNetwork) =>
-
-                        b.signal - a.signal
-
-                );
-
+            const response = await CapacitorHttp.request({
+                method: "GET",
+                url: `${this.deviceUrl}/scan`,
+                connectTimeout: 20000,
+                readTimeout: 20000
+            });
+            return readWiFiScanResponse(response.status, response.data);
+        } catch (error) {
+            if (error instanceof WiFiScanError) throw error;
+            throw new WiFiScanError("unreachable",
+                "The Wi-Fi scan connection failed or timed out. Check your connection to this pole's HonorPole-Setup Wi-Fi, then press Refresh Networks.");
         }
-        catch (error) {
-
-            console.error(
-
-                "[WiFi] Scan failed:",
-
-                error
-
-            );
-
-            return [];
-
-        }
-
     }
 
     /* ======================================================
