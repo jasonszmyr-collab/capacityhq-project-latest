@@ -227,15 +227,10 @@ class HonorPoleSDK {
 
     constructor() {
 
-        console.log("");
 
-        console.log("========================================");
 
-        console.log(" HonorPole SDK Started");
 
-        console.log(" Version 1.0.0");
 
-        console.log("========================================");
 
     }
 
@@ -473,9 +468,6 @@ class HonorPoleSDK {
 
     public async initialize(): Promise<void> {
 
-        console.log(
-            "[HonorPole] Initializing SDK..."
-        );
 
     }
 
@@ -483,9 +475,6 @@ class HonorPoleSDK {
 
     public async shutdown(): Promise<void> {
 
-        console.log(
-            "[HonorPole] Shutdown"
-        );
 
     }
 
@@ -493,9 +482,6 @@ class HonorPoleSDK {
 
     public async refresh(): Promise<void> {
 
-        console.log(
-            "[HonorPole] Refresh Requested"
-        );
 
     }
 

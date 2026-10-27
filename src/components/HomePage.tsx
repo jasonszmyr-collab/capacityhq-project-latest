@@ -893,10 +893,6 @@ if (devices.length > 0)
                     state.testmode === true
                 );
 
-                console.log(
-                    "[HomePage] HonorPole mode:",
-                    state.override_mode
-                );
             }
             catch (error)
             {
@@ -1035,9 +1031,6 @@ if (devices.length > 0)
                 "Connected"
             );
 
-            console.log(
-                "[HomePage] Automatic mode enabled"
-            );
         }
         catch (error)
         {
@@ -1142,9 +1135,6 @@ if (devices.length > 0)
                 "Sending Command..."
             );
 
-            console.log(
-                `[HomePage] Sending ${command.toUpperCase()} to ${selectedDeviceId}`
-            );
 
             const result =
                 await cloudService.sendCommandResult(
@@ -1159,9 +1149,6 @@ if (devices.length > 0)
                 "Connected"
             );
 
-            console.log(
-                `[HomePage] ${command.toUpperCase()} request sent`
-            );
         }
         catch (error)
         {
@@ -1226,9 +1213,6 @@ if (devices.length > 0)
                 "Connected"
             );
 
-            console.log(
-                "[HomePage] STOP request sent"
-            );
         }
         catch (error)
         {
@@ -2128,13 +2112,6 @@ if (devices.length > 0)
                                 to="/setup"
                             >
                                 Setup Wizard
-                            </Link>
-
-                            <Link
-                                className="btn"
-                                to="/diagnostics"
-                            >
-                                Diagnostics
                             </Link>
 
                             <Link

@@ -8,7 +8,6 @@ import { App as CapacitorApp } from "@capacitor/app";
 import ProvisioningProgress from "./pages/ProvisioningProgress";
 
 import HomePage from "./components/HomePage";
-import FlagControlTest from "./components/FlagControlTest";
 import CloudControlPage from "./components/CloudControlPage";
 import Login from "./components/Login";
 import ResetPassword from "./components/ResetPassword";
@@ -219,7 +218,6 @@ function App() {
       <Route path="/" element={<HomePage />} />
       <Route path="/cloud" element={<CloudControlPage />} />
       <Route path="/settings" element={<Settings />} />
-      <Route path="/flag-test" element={<FlagControlTest />} />
 
       <Route path="*" element={<Navigate to="/" />} />
     </>

@@ -491,12 +491,6 @@ this.currentDeviceId =
         "honorpole_selected_device_id"
     );
 
-console.log("===================================");
-console.log(" HonorPole Cloud Service v5.0.0");
-console.log("===================================");
-console.log("Cloud:", CLOUD_API);
-console.log("WebSocket:", WS_ENDPOINT);
-console.log("Ready.");
     }
     
         //======================================================
@@ -1117,9 +1111,6 @@ console.log("Ready.");
             });
         }
 
-        console.log(
-            `[Cloud] Local Device ${ip}`
-        );
     }
 
     //------------------------------------------------------
@@ -1357,9 +1348,6 @@ console.log("Ready.");
             this.telemetry.deviceName =
                 found.device;
 
-            console.log(
-                `[Cloud] Device Found ${found.ip}`
-            );
 
             this.notifyConnectionSubscribers(
                 true
@@ -1855,18 +1843,11 @@ this.notifyTelemetrySubscribers();
 
                 case "connected":
 
-                    console.log(
-                        "[Cloud] Device Connected"
-                    );
 
                     break;
 
                 default:
 
-                    console.log(
-                        "[Cloud] WS",
-                        message
-                    );
 
                     break;
             }
@@ -2034,9 +2015,6 @@ this.notifyTelemetrySubscribers();
                 "queued"
         });
 
-        console.log(
-            `[Queue] ${command} queued`
-        );
     }
 
     //------------------------------------------------------
@@ -2097,9 +2075,6 @@ this.notifyTelemetrySubscribers();
 
                 this.commandQueue.shift();
 
-                console.log(
-                    `[Queue] Sent ${item.command}`
-                );
             }
         }
         finally

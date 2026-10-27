@@ -27,7 +27,6 @@ export default function WiFiSetup() {
 
         if (cancelled) return;
 
-        console.log(`Discovery Attempt ${attempt}`);
 
         const device = await wifiService.discoverHonorPole();
 

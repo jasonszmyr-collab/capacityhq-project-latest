@@ -101,7 +101,6 @@ export default function FlagControlTest() {
             return;
           }
         } catch {
-          console.log("Saved IP failed");
         }
       }
 
@@ -135,7 +134,6 @@ if (device) {
       setStatus(res.data);
       setDeviceOnline(true);
     } catch {
-  console.log("Status fetch failed");
   setDeviceOnline(false);
 }  
     };

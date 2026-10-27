@@ -295,7 +295,6 @@ class WiFiService {
 
     async discoverHonorPole(): Promise<HonorPoleDevice | null> {
 
-        console.log("[WiFi] Starting HonorPole discovery...");
 
         const candidates: string[] = [];
 
@@ -313,14 +312,12 @@ class WiFiService {
 
         for (const url of candidates) {
 
-            console.log("[WiFi] Trying:", url);
 
             const device =
                 await this.probeDevice(url);
 
             if (device) {
 
-                console.log("[WiFi] HonorPole found:", device.ip);
 
                 return device;
 
@@ -330,7 +327,6 @@ class WiFiService {
 
         this.deviceUrl = null;
 
-        console.log("[WiFi] HonorPole not found.");
 
         return null;
 
@@ -361,13 +357,6 @@ class WiFiService {
 
             }
 
-            console.log(
-
-                "[WiFi] Sending credentials to:",
-
-                this.deviceUrl
-
-            );
 
             const body = {
 
@@ -414,7 +403,6 @@ class WiFiService {
 
             await this.saveCredentials(credentials);
 
-            console.log("[WiFi] Credentials stored.");
 
             await new Promise(
 
