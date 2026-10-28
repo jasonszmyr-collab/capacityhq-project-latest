@@ -6,7 +6,8 @@ const HEX = /^[0-9A-F]{32}$/;
 const REQUEST_MS = 45000;
 const WINDOW_MS = 600000;
 function message(r) {
-  return ['HPSETUP1', r.deviceId, r.boot, r.requestId, r.password, r.deadline].join('|');
+  return [r.recovery === true ? 'HPSETUP2' : 'HPSETUP1', r.deviceId, r.boot, r.requestId, r.password, r.deadline,
+    ...(r.recovery === true ? ['RECOVERY'] : [])].join('|');
 }
 function signature(r, secret) {
   return crypto.createHmac('sha256', secret).update(message(r)).digest('hex').toUpperCase();
@@ -57,7 +58,7 @@ function createSetupAccess({getState, now = Date.now, random = () =>
     if (sessions.size >= 1000) return res.status(503).json({success:false, error:'Setup capacity reached'});
     const s = {deviceId:id, boot:b.boot, requestId:random(), password:random(),
       deadline:(b.clock + REQUEST_MS) >>> 0, owner:req.user.id,
-      created:now(), expires:now()+REQUEST_MS, result:'PENDING'};
+      created:now(), expires:now()+REQUEST_MS, result:'PENDING', recovery:b.recovery === true};
     sessions.set(id, s);
     return res.status(202).json({success:true, deviceId:id, requestId:s.requestId});
   }
@@ -70,7 +71,8 @@ function createSetupAccess({getState, now = Date.now, random = () =>
     const result = {success:true, deviceId:s.deviceId, requestId:s.requestId, result:s.result};
     // Reveal only after the board acknowledges that its protected AP is running.
     if (s.result === 'OPEN') Object.assign(result, {ssid:`HonorPole-Setup-${s.deviceId}`,
-      password:s.password, remainingMs:Math.max(0,s.expires-now())});
+      password:s.password, remainingMs:Math.max(0,s.expires-now()),
+      ...(s.recovery && HEX.test(s.recoveryPassword || '') ? {recoveryPassword:s.recoveryPassword} : {})});
     return res.json(result);
   }
   function poll(req, res) {
@@ -86,12 +88,12 @@ function createSetupAccess({getState, now = Date.now, random = () =>
     if (!boards.has(id) && boards.size >= 1000) return res.status(503).json({success:false});
     const previous = boards.get(id);
     if (previous && previous.boot !== boot) sessions.delete(id);
-    boards.set(id, {boot, clock:Number(rawClock), seen:now()});
+    boards.set(id, {boot, clock:Number(rawClock), seen:now(), recovery:req.query.recovery === '1'});
     const s = sessions.get(id);
     if (!s || s.boot !== boot || s.result !== 'PENDING' || !idle(id))
       return res.json({success:true, setup:null});
     const packet = {deviceId:id, boot:s.boot, requestId:s.requestId,
-      password:s.password, deadline:s.deadline};
+      password:s.password, deadline:s.deadline, ...(s.recovery ? {recovery:true} : {})};
     packet.signature = signature(packet, secret.trim());
     return res.json({success:true, setup:packet});
   }
@@ -103,6 +105,10 @@ function createSetupAccess({getState, now = Date.now, random = () =>
     if (!s || s.boot !== data.boot || s.requestId !== data.requestId ||
       !['OPEN','REFUSED'].includes(data.result)) return res.status(409).json({success:false});
     if (s.result === 'PENDING') {
+      // Recovery material is accepted only for an explicitly signed v2 request.
+      if (s.recovery && data.result === 'OPEN' && !HEX.test(data.recoveryPassword || ''))
+        return res.status(400).json({success:false, error:'Recovery credential missing or invalid'});
+      if (s.recovery && data.result === 'OPEN') s.recoveryPassword = data.recoveryPassword;
       s.result = data.result;
       // Conservatively account for request/delivery delay; retries never extend.
       s.expires = s.result === 'OPEN' ? s.created + WINDOW_MS : now() + 15000;
