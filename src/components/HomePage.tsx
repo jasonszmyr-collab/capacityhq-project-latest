@@ -68,6 +68,7 @@ import {
 
 import {
     getHonorPoleDirectiveStatus,
+    getDirectiveCoverageWarning,
     type HonorPoleDirectiveStatus
 } from "../services/honorPoleDirectiveService";
 
@@ -830,6 +831,10 @@ if (devices.length > 0)
             }
             catch (error)
             {
+                if (mounted)
+                {
+                    setDirectiveStatus(null);
+                }
                 console.error(
                     "Failed to load HonorPole directive status:",
                     error
@@ -1742,6 +1747,11 @@ if (devices.length > 0)
                     {/* ================================================== */}
 
                                         <InfoCard title="Honor Status">
+                        {getDirectiveCoverageWarning(directiveStatus) && (
+                            <p role="status" className="text-sm text-amber-200 mb-3">
+                                {getDirectiveCoverageWarning(directiveStatus)}
+                            </p>
+                        )}
 
                         <StatusRow
                             label="Federal Directive"
@@ -1749,7 +1759,7 @@ if (devices.length > 0)
                                 directiveStatus?.federal.active
                                     ? directiveStatus.federal.title ||
                                       "Active"
-                                    : "None"
+                                    : (directiveStatus ? "None" : "Unavailable")
                             }
                         />
 
@@ -1759,7 +1769,7 @@ if (devices.length > 0)
                                 directiveStatus?.state.active
                                     ? directiveStatus.state.title ||
                                       "Active"
-                                    : "None"
+                                    : (directiveStatus ? "None" : "Unavailable")
                             }
                         />
 

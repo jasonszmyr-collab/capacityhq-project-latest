@@ -18,13 +18,19 @@ class DeviceDiscovery {
         if (!saved.value) return null;
         return this.probe(saved.value.startsWith("http://") ? saved.value : `http://${saved.value}`, expectedDeviceId);
     }
-    async discover(expectedDeviceId?: string): Promise<DeviceInfo | null> {
+    async discover(expectedDeviceId?: string, allowSetupAp = true): Promise<DeviceInfo | null> {
         if (!expectedDeviceId || !/^HP-[0-9]{3,6}$/.test(expectedDeviceId)) return null;
         const saved = await Preferences.get({ key: `honorpole_last_ip_${expectedDeviceId}` });
         const addresses = saved.value ? [saved.value.startsWith("http://") ? saved.value : `http://${saved.value}`] : [];
         addresses.push("http://192.168.4.1", "http://honorpole.local");
         for (let i = 1; i <= 254; i++) addresses.push(`http://192.168.0.${i}`);
         for (const base of new Set(addresses)) {
+            // Reconnection checks must not accept the setup AP, including a cached AP address.
+            if (!allowSetupAp) {
+                try {
+                    if (new URL(base).hostname === "192.168.4.1") continue;
+                } catch { continue; }
+            }
             const found = await this.probe(base, expectedDeviceId);
             if (!found) continue;
             await Preferences.set({ key: `honorpole_last_ip_${expectedDeviceId}`, value: found.ip });

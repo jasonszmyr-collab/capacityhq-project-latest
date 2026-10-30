@@ -41,3 +41,7 @@ web-build/
 
 # Metro
 .metro-health-check*
+
+# Local Android signing configuration
+/android/keystore.properties
+/android/app/upload-keystore.jks

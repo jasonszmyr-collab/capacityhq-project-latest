@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabaseClient";
+import cloudService from "../services/cloudService";
 
 import {
     useSystemStatus,
@@ -71,6 +72,7 @@ export default function AppHeader({
     reserveSpace?: boolean;
 })
 {
+    const signedIn = cloudService.isAuthenticated();
     const headerRef = useRef<HTMLDivElement>(null);
     const [headerHeight, setHeaderHeight] = useState(0);
 
@@ -302,7 +304,8 @@ const handleLogout = async () =>
                     type="button"
                     onClick={() =>
                     {
-                        void handleLogout();
+                        if (signedIn) void handleLogout();
+                        else navigate("/");
                     }}
                     className="
                         px-3
@@ -316,7 +319,7 @@ const handleLogout = async () =>
                         transition
                     "
                     >
-                    Sign Out
+                    {signedIn ? "Sign Out" : "Sign In"}
                 </button>
 
             </div>

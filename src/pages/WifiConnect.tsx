@@ -4,8 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import AppHeader from "../components/AppHeader";
 import BottomNav from "../components/BottomNav";
 
-import { protectedSetup } from "../services/protectedSetup";
-import cloudService from "../services/cloudService";
+import { protectedSetup, getSetupDeviceId } from "../services/protectedSetup";
 
 export default function WifiConnect() {
 
@@ -65,7 +64,7 @@ export default function WifiConnect() {
 
     try {
 
-      const deviceId = cloudService.getCurrentDeviceId();
+      const deviceId = getSetupDeviceId();
       await protectedSetup.save(network.ssid, password);
       if (!mounted.current) return;
       setPassword("");

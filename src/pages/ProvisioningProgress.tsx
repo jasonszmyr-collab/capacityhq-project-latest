@@ -1,6 +1,7 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import cloudService from "../services/cloudService";
+import { getSetupDeviceId } from "../services/protectedSetup";
 import { discovery } from "../services/deviceDiscovery";
 
 import AppHeader from "../components/AppHeader";
@@ -33,8 +34,8 @@ export default function ProvisioningProgress() {
     const scope = cloudService.getProtectedSetupScope();
     let active = true;
     let next: ReturnType<typeof setTimeout>;
-    const current = () => active && scope === cloudService.getProtectedSetupScope();
-    if (!deviceId || deviceId !== cloudService.getCurrentDeviceId()) {
+    const current = () => active && scope === cloudService.getProtectedSetupScope() && deviceId === getSetupDeviceId();
+    if (!deviceId || deviceId !== getSetupDeviceId()) {
       setFailed(true); setStatus("Select the HonorPole again");
       setDetail("This page has no matching Wi-Fi save for the selected pole.");
       return () => { active = false; };
@@ -46,12 +47,12 @@ export default function ProvisioningProgress() {
     async function poll() {
       if (!current()) return;
       try {
-        const device = await discovery.discover(deviceId);
+        const device = await discovery.discover(deviceId, false);
         if (!current()) return;
         if (device) {
           setDeviceIP(device.ip); setFirmware(device.firmware);
           setProgress(100); setStatus(`${deviceId} found on the local network`);
-          setDetail("The selected pole responded. Check Home for its cloud connection.");
+          setDetail("This pole responded at the local address shown below. This confirms local reachability; it does not verify the requested Wi-Fi network or cloud access. Sign in with its authorized account to check cloud access.");
           return;
         }
       } catch { /* Failed discovery cannot establish reconnection. */ }

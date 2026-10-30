@@ -4,6 +4,8 @@ const config: CapacitorConfig = {
   appId: 'com.capacity.app',
   appName: 'HonorPole',
   webDir: 'dist',
+  // Native bridge arguments can contain setup/recovery credentials.
+  loggingBehavior: 'none',
 
   server: {
     androidScheme: 'https',

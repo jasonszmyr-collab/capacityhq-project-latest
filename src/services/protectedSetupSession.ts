@@ -2,7 +2,7 @@ import { readWiFiScanResponse, WiFiScanError } from "./wifiScanResponse";
 
 export interface SetupContext { deviceId: string | null; scope: string; }
 export interface SetupSession {
-    deviceId: string; scope: string; password: string; expiresAt: number;
+    deviceId: string; scope: string; password: string; expiresAt: number; recoveryPassword?: string;
 }
 interface Reply { status: number; data: unknown; }
 export interface SetupDependencies {
@@ -30,7 +30,7 @@ export class ProtectedSetupSession {
     cancelPending() { ++this.generation; }
     private context(): SetupContext {
         const context = this.deps.context();
-        if (!context.deviceId || !/^HP-\d{3,6}$/.test(context.deviceId)) throw new Error("Select an HonorPole on Home first.");
+        if (!context.deviceId || !/^HP-\d{3,6}$/.test(context.deviceId)) throw new Error("Enter the pole ID and private setup-card password in protected setup, or sign in and select an HonorPole on Home.");
         return context;
     }
     private current(context: SetupContext, generation: number) {
@@ -47,7 +47,7 @@ export class ProtectedSetupSession {
     }
     useUsb(password: string) {
         const context = this.context();
-        if (!hex(password)) throw new Error("Enter the 32-character setup password from USB SETUP, using uppercase letters and digits.");
+        if (!hex(password)) throw new Error("Enter the 32-character private setup password from the pole setup card or USB SETUP, using uppercase letters and digits.");
         this.clear();
         this.session = { deviceId: context.deviceId!, scope: context.scope, password, expiresAt: this.deps.now() + 600000 };
     }
@@ -70,8 +70,11 @@ export class ProtectedSetupSession {
                 if (reply.result === "OPEN") {
                     if (!hex(reply.password) || reply.ssid !== `HonorPole-Setup-${context.deviceId}` ||
                         typeof reply.remainingMs !== "number" || !Number.isFinite(reply.remainingMs) || reply.remainingMs <= 0 || reply.remainingMs > 600000) throw new Error("Invalid protected setup credentials.");
+                    if (reply.recoveryPassword !== undefined && !hex(reply.recoveryPassword))
+                        throw new Error("Invalid recovery credential. Setup was not retained.");
                     this.session = { deviceId: context.deviceId!, scope: context.scope, password: reply.password,
-                        expiresAt: this.deps.now() + Math.max(0, reply.remainingMs - 2000) };
+                        expiresAt: this.deps.now() + Math.max(0, reply.remainingMs - 2000),
+                        ...(hex(reply.recoveryPassword) ? {recoveryPassword:reply.recoveryPassword} : {}) };
                     return;
                 }
                 if (reply.result !== "PENDING") throw new Error("Unknown setup result.");
@@ -111,7 +114,7 @@ export class ProtectedSetupSession {
     async save(ssid: string, password: string): Promise<void> {
         if (this.saving) throw new Error("A Wi-Fi save is already in progress.");
         const session = this.details();
-        if (!session) throw new Error("Open protected setup or enter its USB setup password first.");
+        if (!session) throw new Error("Open protected setup or enter the private setup-card password first.");
         if (!ssid.trim() || ssid.length > 32) throw new Error("Select a valid Wi-Fi network.");
         const context = this.context(), generation = this.generation;
         this.saving = true;

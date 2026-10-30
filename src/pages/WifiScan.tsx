@@ -78,9 +78,9 @@ export default function WifiScan() {
 
     <div className="relative min-h-screen">
 
-      <AppHeader title="Setup" />
+      <AppHeader title="Setup" reserveSpace />
 
-      <div className="px-6 pt-24 pb-24 text-white space-y-6">
+      <div className="px-6 pt-6 pb-24 text-white space-y-6">
 
         {/* STATUS */}
 

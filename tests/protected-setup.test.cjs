@@ -82,7 +82,7 @@ function connectHarness(save) {
  const states=[],refs=[],effects=[],navigation=[];let si=0,ri=0,initialized=false;
  const react={useState:v=>{const i=si++;if(!(i in states))states[i]=v;return[states[i],v=>states[i]=v];},useRef:v=>{const i=ri++;return refs[i]||(refs[i]={current:v});},useEffect:fn=>{if(!initialized)effects.push(fn);}};
  const jsx=(type,props)=>({type,props:props||{}});
- const Page=load('src/pages/WifiConnect.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'react-router-dom':{useLocation:()=>({state:{ssid:'Home',secure:true}}),useNavigate:()=> (...args)=>navigation.push(args)},'../components/AppHeader':{default:'header'},'../components/BottomNav':{default:'nav'},'../services/protectedSetup':{protectedSetup:{save}},'../services/cloudService':{default:{getCurrentDeviceId:()=> 'HP-004'}}}).default;
+ const Page=load('src/pages/WifiConnect.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'react-router-dom':{useLocation:()=>({state:{ssid:'Home',secure:true}}),useNavigate:()=> (...args)=>navigation.push(args)},'../components/AppHeader':{default:'header'},'../components/BottomNav':{default:'nav'},'../services/protectedSetup':{protectedSetup:{save},getSetupDeviceId:()=> 'HP-004'},'../services/cloudService':{default:{getCurrentDeviceId:()=> 'HP-004'}}}).default;
  function nodes(v){if(!v||typeof v!=='object')return[];if(Array.isArray(v))return v.flatMap(nodes);return[v,...nodes(v.props?.children)];}
  function render(){si=0;ri=0;return nodes(Page());}
  render();initialized=true;const cleanups=effects.map(fn=>fn());
