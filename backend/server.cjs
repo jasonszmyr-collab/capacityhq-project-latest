@@ -1259,111 +1259,7 @@ command: {
 app.post(
   "/api/device/pairing-code",
   requireDevicePairingAuth,
-  async (req, res) => {
-    if (!SUPABASE_SERVICE_ROLE_KEY) {
-      return res.status(503).json({
-        success: false,
-        error: "Device pairing is unavailable"
-      });
-    }
-
-    const pairingCode =
-      typeof req.body?.pairingCode === "string"
-        ? req.body.pairingCode.trim().toUpperCase()
-        : "";
-
-    if (!pairingCode) {
-      return res.status(400).json({
-        success: false,
-        error: "Pairing code is required"
-      });
-    }
-
-    if (!/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/.test(pairingCode)) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid pairing code format"
-      });
-    }
-
-    const pairingCodeHash =
-      hashPairingCode(pairingCode);
-
-    const expiresAt =
-      new Date(
-        Date.now() + 60 * 60 * 1000
-      ).toISOString();
-
-    try {
-      const response = await fetch(
-        `${SUPABASE_URL}/rest/v1/devices` +
-          `?device_id=eq.${encodeURIComponent(req.deviceId)}` +
-          `&pairing_claimed_at=is.null&is_active=eq.true`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization:
-              `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-            apikey:
-              SUPABASE_SERVICE_ROLE_KEY,
-            "Content-Type":
-              "application/json",
-            Prefer:
-              "return=representation"
-          },
-          body: JSON.stringify({
-            pairing_code_hash:
-              pairingCodeHash,
-            pairing_code_expires_at:
-              expiresAt,
-            pairing_claimed_at:
-              null
-          })
-        }
-      );
-
-      const body = await response.text();
-
-      if (!response.ok) {
-        console.error(
-          "Pairing code registration failed:",
-          response.status,
-          body
-        );
-
-        return res.status(502).json({
-          success: false,
-          error:
-            "Unable to register pairing code"
-        });
-      }
-
-      // A missing factory device row cannot yield a usable pairing code.
-      const updated = JSON.parse(body);
-      if (!Array.isArray(updated) || updated.length !== 1) {
-        return res.status(409).json({ success: false, error: "Device is already claimed or its factory record is missing" });
-      }
-
-      return res.status(200).json({
-        success: true,
-        deviceId: req.deviceId,
-        expiresAt
-      });
-    } catch (error) {
-      console.error(
-        "Pairing code registration error:",
-        error instanceof Error
-          ? error.message
-          : "Unknown error"
-      );
-
-      return res.status(500).json({
-        success: false,
-        error:
-          "Pairing code registration failed"
-      });
-    }
-  }
+  factoryRegistry.reissue
 );
 
 // =========================================================
@@ -1974,5 +1870,3 @@ server.listen(
     );
   }
 );
-
-

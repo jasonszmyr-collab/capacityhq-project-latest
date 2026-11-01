@@ -177,6 +177,39 @@ function createFactoryRegistry({supabaseUrl, serviceKey, anonKey, legacySecrets 
         }
     }
 
+    // Device-authenticated first-claim code replacement. Database function owns
+    // membership, row locking, collision checks, and expiration decisions.
+    async function reissue(req, res) {
+        if (!enabled || !serviceKey) {
+            return res.status(503).json({success: false, error: 'Device pairing unavailable'});
+        }
+        const id = req.deviceId;
+        const pairingCode = typeof req.body?.pairingCode === 'string'
+            ? req.body.pairingCode.trim().toUpperCase() : '';
+        if (typeof id !== 'string' || !DEVICE_PATTERN.test(id) || !CODE_PATTERN.test(pairingCode)) {
+            return res.status(400).json({success: false, error: 'Invalid pairing request'});
+        }
+        try {
+            const data = await rpc('honorpole_reissue_pairing_code', {
+                p_device_id: id, p_pairing_code_hash: sha256(pairingCode)
+            });
+            if (!data || data.deviceId !== id || typeof data.expiresAt !== 'string' ||
+                !Number.isFinite(Date.parse(data.expiresAt))) {
+                throw new Error('Invalid pairing replacement result');
+            }
+            return res.status(200).json({success: true, deviceId: id, expiresAt: data.expiresAt});
+        } catch (error) {
+            const status = {HP400:400, HP401:401, HP404:404, HP409:409, HP410:410}[error.code] || 503;
+            return res.status(status).json({success: false, error: {
+                400:'Invalid pairing request', 401:'Device authentication required',
+                404:'Factory device not found',
+                409:'Device unavailable, already assigned, or pairing code reserved',
+                410:'Pairing code expired; generate a new private code',
+                503:'Device pairing unavailable'
+            }[status]});
+        }
+    }
+
     async function claim(req, res, legacyHandler) {
         if (!enabled) return legacyHandler(req, res);
         const pairingCode = typeof req.body?.pairingCode === 'string' ? req.body.pairingCode.trim().toUpperCase() : '';
@@ -204,6 +237,6 @@ function createFactoryRegistry({supabaseUrl, serviceKey, anonKey, legacySecrets 
             }[status]});
         }
     }
-    return {requirePairingAuth, requireTelemetryAuth, register, migrate, claim};
+    return {requirePairingAuth, requireTelemetryAuth, register, migrate, reissue, claim};
 }
 module.exports = {createFactoryRegistry};
