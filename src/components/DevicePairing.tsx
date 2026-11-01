@@ -100,7 +100,7 @@ export default function DevicePairing({ onPairingSuccess }: DevicePairingProps) 
               className="border-slate-600 bg-slate-950 text-slate-50 placeholder:text-slate-500 focus-visible:ring-blue-500"
             />
             <p className="text-xs text-slate-400">
-              For this bench version, connect the board to USB and send PAIR in Serial Monitor.
+              Use the private pairing code supplied by Honor Pole Innovations or your installer. If it is missing or expired, contact them for assistance.
             </p>
           </div>
 
@@ -140,13 +140,19 @@ export default function DevicePairing({ onPairingSuccess }: DevicePairingProps) 
 
         <div className="mt-6 rounded-lg border border-blue-800 bg-blue-950/70 p-4">
           <h3 className="mb-2 text-sm font-semibold text-blue-200">
-            How to get your pairing code:
+            Pair a new HonorPole with your account:
           </h3>
           <ol className="list-inside list-decimal space-y-1 text-sm text-blue-100">
-            <li>Connect your device to WiFi using the WiFi setup</li>
-            <li>Send PAIR over USB serial after the device is connected to the Internet</li>
-            <li>Enter its label ID and the code above to link it to your account</li>
+            <li>Connect your pole to Wi-Fi using its private setup card</li>
+            <li>Sign in to your own HonorPole account</li>
+            <li>Manually enter the device ID from the label, the current private pairing code, and a name for your pole</li>
           </ol>
+          <p className="mt-3 text-sm text-blue-100">
+            The pairing code is different from the Wi-Fi setup-card password.
+            For a pole that already belongs to someone else, arrange the account
+            handover with the current owner. To use a share code, choose
+            Join a shared HonorPole above.
+          </p>
         </div>
       </CardContent>
     </Card>
