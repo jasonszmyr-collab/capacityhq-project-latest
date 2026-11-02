@@ -188,7 +188,7 @@ export class OTAFirmwareProvider implements IFirmwareProvider {
 
     //-----------------------------------------------------
 
-    private validateFirmware(data: any): void {
+    private validateFirmware(data: { version?: unknown; buildNumber?: unknown; releaseDate?: unknown } | null | undefined): void {
 
         if (!data) {
 

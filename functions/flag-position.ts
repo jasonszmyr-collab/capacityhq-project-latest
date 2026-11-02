@@ -22,6 +22,20 @@
 
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.4";
 
+// The SDK exposes dynamic entity collections. Describe only the existing
+// FlagPosition operations used here; this does not add runtime validation.
+type FlagPositionRecord = Record<string, unknown> & { id: string };
+type FlagPositionClient = ReturnType<typeof createClientFromRequest> & {
+  asServiceRole: {
+    entities: {
+      FlagPosition: {
+        list(sort: string, limit: number): Promise<FlagPositionRecord[] | null>;
+        update(id: string, patch: Record<string, unknown>): Promise<unknown>;
+      };
+    };
+  };
+};
+
 type RequestBody = {
   request?: "full" | "half" | "down" | "auto";
   testmode?: boolean;
@@ -39,7 +53,7 @@ function normalizeRequestedPosition(req?: string) {
   return null;
 }
 
-async function getLatestFlagPosition(base44: any) {
+async function getLatestFlagPosition(base44: FlagPositionClient) {
   const list = await base44.asServiceRole.entities.FlagPosition.list(
     "-updated_date",
     1
@@ -56,8 +70,8 @@ async function getLatestFlagPosition(base44: any) {
  *   - It does not mutate enforced_position / position fields
  */
 async function storeRequest(
-  base44: any,
-  flagData: any,
+  base44: FlagPositionClient,
+  flagData: FlagPositionRecord,
   body: RequestBody
 ) {
   const requested = normalizeRequestedPosition(body.request);
@@ -95,7 +109,7 @@ async function storeRequest(
  * If the device reported DENIED_REQUEST, we can record that the UI/backend saw it.
  * This is NOT enforcement and does not change any requested/enforced state.
  */
-async function acknowledgeDenialIfPresent(base44: any, flagData: any) {
+async function acknowledgeDenialIfPresent(base44: FlagPositionClient, flagData: FlagPositionRecord) {
   const status = (flagData.arduino_status || "").toString();
   if (status !== "DENIED_REQUEST") return { acked: false };
 
@@ -116,7 +130,7 @@ async function acknowledgeDenialIfPresent(base44: any, flagData: any) {
 // ---------------------------------------------------------------------------
 Deno.serve(async (req) => {
   try {
-    const base44 = createClientFromRequest(req);
+    const base44 = createClientFromRequest(req) as FlagPositionClient;
 
     // Always operate on the most recent FlagPosition record
     const flagData = await getLatestFlagPosition(base44);
@@ -209,9 +223,9 @@ Deno.serve(async (req) => {
       { success: false, error: "Method not allowed." },
       { status: 405 }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     return Response.json(
-      { success: false, error: error?.message ?? String(error) },
+      { success: false, error: (error as { message?: unknown } | null | undefined)?.message ?? String(error) },
       { status: 500 }
     );
   }

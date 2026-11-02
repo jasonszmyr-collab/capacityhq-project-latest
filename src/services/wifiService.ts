@@ -43,7 +43,7 @@ export interface HonorPoleStatus {
     fullPosition: number;
     halfPosition: number;
     moving: boolean;
-    raw: any;
+    raw: unknown;
 }
 
 /* ==========================================================
@@ -170,7 +170,7 @@ class WiFiService {
 
     private async probe(
         url: string
-    ): Promise<any | null> {
+    ): Promise<unknown | null> {
 
         try {
 
@@ -436,7 +436,7 @@ class WiFiService {
             };
 
         }
-        catch (error: any) {
+        catch (error: unknown) {
 
             console.error(
 
@@ -451,7 +451,7 @@ class WiFiService {
                 success: false,
 
                 message:
-                    error?.message ??
+                    (error as { message?: string } | null | undefined)?.message ??
                     "Provisioning failed."
 
             };

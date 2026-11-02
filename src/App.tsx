@@ -20,7 +20,7 @@ import { supabase } from "./services/supabaseClient";
 import { cloudService } from "./services/cloudService";
 
 function App() {
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<Session["user"] | null>(null);
   const [loading, setLoading] = useState(true);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [recoveryError, setRecoveryError] = useState("");
