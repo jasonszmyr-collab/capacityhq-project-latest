@@ -1256,6 +1256,8 @@ command: {
 // Requires per-device authentication.
 // =========================================================
 
+app.get("/api/device/pairing-protocol", requireDevicePairingAuth, factoryRegistry.pairingProtocol);
+
 app.post(
   "/api/device/pairing-code",
   requireDevicePairingAuth,

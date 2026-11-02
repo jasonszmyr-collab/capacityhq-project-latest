@@ -177,6 +177,24 @@ function createFactoryRegistry({supabaseUrl, serviceKey, anonKey, legacySecrets 
         }
     }
 
+    // Authenticated, non-mutating capability probe. The SQL function is installed
+    // atomically with the guarded and hardened legacy issuance functions.
+    async function pairingProtocol(req, res) {
+        if (!enabled || !serviceKey) return res.status(503).json({success:false, error:'Device pairing unavailable'});
+        const id = req.deviceId;
+        if (typeof id !== 'string' || !DEVICE_PATTERN.test(id)) {
+            return res.status(400).json({success:false, error:'Invalid device ID'});
+        }
+        try {
+            const data = await rpc('honorpole_pairing_protocol_r3', {p_device_id:id});
+            if (!data || data.deviceId !== id || data.protocol !== 3) throw new Error('Invalid protocol result');
+            return res.status(200).json({success:true, deviceId:id, pairingProtocol:3});
+        } catch (error) {
+            const status = {HP400:400, HP404:404, HP409:409}[error.code] || 503;
+            return res.status(status).json({success:false, error:'Pairing protocol unavailable'});
+        }
+    }
+
     // Device-authenticated first-claim code replacement. Database function owns
     // membership, row locking, collision checks, and expiration decisions.
     async function reissue(req, res) {
@@ -189,15 +207,31 @@ function createFactoryRegistry({supabaseUrl, serviceKey, anonKey, legacySecrets 
         if (typeof id !== 'string' || !DEVICE_PATTERN.test(id) || !CODE_PATTERN.test(pairingCode)) {
             return res.status(400).json({success: false, error: 'Invalid pairing request'});
         }
+        // The old two-field protocol is retry-only once the R3 SQL guard is installed.
+        // Both guard fields must be supplied for any replacement mutation.
+        const guarded = req.body?.requestId !== undefined || req.body?.previousPairingCode !== undefined;
+        const requestId = req.body?.requestId;
+        const previous = typeof req.body?.previousPairingCode === 'string'
+            ? req.body.previousPairingCode.trim().toUpperCase() : '';
+        if (guarded && (typeof requestId !== 'string' || !UUID_PATTERN.test(requestId) ||
+            !CODE_PATTERN.test(previous) || previous === pairingCode)) {
+            return res.status(400).json({success: false, error: 'Invalid guarded pairing request'});
+        }
         try {
-            const data = await rpc('honorpole_reissue_pairing_code', {
-                p_device_id: id, p_pairing_code_hash: sha256(pairingCode)
-            });
+            const data = guarded
+                ? await rpc('honorpole_replace_pairing_code_r3', {
+                    p_device_id: id, p_request_id: requestId.toLowerCase(),
+                    p_expected_pairing_hash: sha256(previous), p_pairing_code_hash: sha256(pairingCode)
+                })
+                : await rpc('honorpole_reissue_pairing_code', {
+                    p_device_id: id, p_pairing_code_hash: sha256(pairingCode)
+                });
             if (!data || data.deviceId !== id || typeof data.expiresAt !== 'string' ||
                 !Number.isFinite(Date.parse(data.expiresAt))) {
                 throw new Error('Invalid pairing replacement result');
             }
-            return res.status(200).json({success: true, deviceId: id, expiresAt: data.expiresAt});
+            return res.status(200).json({success: true, deviceId: id, expiresAt: data.expiresAt,
+                ...(guarded ? {pairingProtocol:3, requestId:requestId.toLowerCase()} : {})});
         } catch (error) {
             const status = {HP400:400, HP401:401, HP404:404, HP409:409, HP410:410}[error.code] || 503;
             return res.status(status).json({success: false, error: {
@@ -237,6 +271,6 @@ function createFactoryRegistry({supabaseUrl, serviceKey, anonKey, legacySecrets 
             }[status]});
         }
     }
-    return {requirePairingAuth, requireTelemetryAuth, register, migrate, reissue, claim};
+    return {requirePairingAuth, requireTelemetryAuth, register, migrate, pairingProtocol, reissue, claim};
 }
 module.exports = {createFactoryRegistry};
