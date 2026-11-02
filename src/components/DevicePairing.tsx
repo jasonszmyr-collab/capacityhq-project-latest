@@ -6,6 +6,33 @@ import { Label } from './ui/label';
 import { Alert, AlertDescription } from './ui/alert';
 import { cloudService } from '../services/cloudService';
 
+function pairingErrorMessage(err: unknown, kind: 'pairing' | 'sharing'): string {
+  const message = err instanceof Error ? err.message : '';
+  const idGuidance = 'Enter the number on the device label, for example HP-002 or 2.';
+  if (kind === 'pairing' && message === idGuidance) return idGuidance;
+
+  const reportedStatus = err && typeof err === 'object' && 'status' in err
+    ? Number(err.status) : 0;
+  const status = reportedStatus || Number(message.match(/^\s*(\d{3})(?:\s|:)/)?.[1]);
+  if (status === 401) return 'Please sign in again before trying this code.';
+  if (status === 403) return 'Your account does not have permission to add this HonorPole.';
+  if (status === 429) return 'Too many attempts. Please wait before trying again.';
+  if (status >= 500 && status <= 599) {
+    return 'The HonorPole service is temporarily unavailable. Please try again later.';
+  }
+  if (kind === 'sharing') {
+    if ([400, 404, 409, 410].includes(status)) {
+      return 'This share code is invalid, expired, already used, or belongs to your own account. Ask the owner for a new share code.';
+    }
+    return 'Unable to confirm shared access. Check your HonorPole list and connection before trying again.';
+  }
+  if (status === 400) return 'Check the device ID and pairing code, then try again.';
+  if (status === 404) return 'Pairing code not recognized for this device. Check the ID and use the latest code from your installer.';
+  if (status === 409) return 'This HonorPole has already been paired. Check your HonorPole list, or ask its owner to share access.';
+  if (status === 410) return 'This pairing code has expired. Ask Honor Pole Innovations or your installer for a new code.';
+  return 'Unable to confirm pairing. Check your HonorPole list and connection before trying again.';
+}
+
 interface DevicePairingProps {
   onPairingSuccess: (deviceId: string) => void;
 }
@@ -38,7 +65,7 @@ export default function DevicePairing({ onPairingSuccess }: DevicePairingProps) 
         onPairingSuccess(result.deviceId);
       }, 1500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to pair device');
+      setError(pairingErrorMessage(err, 'pairing'));
     } finally {
       setLoading(false);
     }
@@ -54,7 +81,7 @@ export default function DevicePairing({ onPairingSuccess }: DevicePairingProps) 
       setSuccess(`You can now control ${deviceId}.`);
       onPairingSuccess(deviceId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to join this HonorPole');
+      setError(pairingErrorMessage(err, 'sharing'));
     } finally {
       setLoading(false);
     }
@@ -70,14 +97,14 @@ export default function DevicePairing({ onPairingSuccess }: DevicePairingProps) 
       </CardHeader>
       <CardContent className="pb-8">
         {error && (
-          <Alert className="mb-4 bg-red-50 border-red-200">
-            <AlertDescription className="text-red-800">{error}</AlertDescription>
+          <Alert className="mb-4 min-w-0 max-w-full bg-red-50 border-red-200">
+            <AlertDescription className="min-w-0 whitespace-normal text-left text-red-800 [overflow-wrap:anywhere]">{error}</AlertDescription>
           </Alert>
         )}
 
         {success && (
-          <Alert className="mb-4 bg-green-50 border-green-200">
-            <AlertDescription className="text-green-800">{success}</AlertDescription>
+          <Alert className="mb-4 min-w-0 max-w-full bg-green-50 border-green-200">
+            <AlertDescription className="min-w-0 whitespace-normal text-left text-green-800 [overflow-wrap:anywhere]">{success}</AlertDescription>
           </Alert>
         )}
 
