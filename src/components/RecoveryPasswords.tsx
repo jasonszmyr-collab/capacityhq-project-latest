@@ -26,6 +26,8 @@ export default function RecoveryPasswords({ session, onUse }: {
     const available = recoveryAvailable();
     const key = (entry: RecoveryEntry) => `${entry.ownerId}:${entry.deviceId}`;
     useEffect(() => {
+        // Capture the ref object so cleanup invalidates the latest counter value.
+        const revisionCounter = revision;
         const version = ++revision.current;
         setUnlocked(null); setReveal(false); setChoice(""); setEntries([]); setMessage(""); setError("");
         working.current = false; setBusy(false);
@@ -33,7 +35,7 @@ export default function RecoveryPasswords({ session, onUse }: {
             if (version === revision.current) setEntries(result);
         }).catch(() => { if (version === revision.current) setError("Could not load this phone's saved recovery passwords."); });
         return () => {
-            ++revision.current;
+            ++revisionCounter.current;
             void recoveryVault.cancelPending().catch(() => {});
         };
     }, [ownerId, scope, available]);

@@ -61,11 +61,13 @@ export default function WifiScan() {
   };
 
   useEffect(() => {
+    // Capture the ref object so cleanup invalidates the latest counter value.
+    const requestCounter = requestId;
     mounted.current = true;
     void scanForNetworks();
     return () => {
       mounted.current = false;
-      ++requestId.current;
+      ++requestCounter.current;
       busy.current = false;
     };
   }, []);
