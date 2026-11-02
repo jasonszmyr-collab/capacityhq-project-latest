@@ -2,17 +2,17 @@ export class LocalIdentityError extends Error {
     constructor(message: string) { super(message); this.name = "LocalIdentityError"; }
 }
 
-export function parseLocalStatus(value: unknown): Record<string, any> {
+export function parseLocalStatus(value: unknown): Record<string, unknown> {
     if (typeof value === "string") {
         try { value = JSON.parse(value); } catch { value = null; }
     }
     if (!value || typeof value !== "object" || Array.isArray(value)) {
         throw new LocalIdentityError("HonorPole identity could not be confirmed. No local command sent.");
     }
-    return value as Record<string, any>;
+    return value as Record<string, unknown>;
 }
 
-export function requireLocalIdentity(value: unknown, expectedDeviceId: string | null): Record<string, any> {
+export function requireLocalIdentity(value: unknown, expectedDeviceId: string | null): Record<string, unknown> {
     if (!expectedDeviceId || !/^HP-[0-9]{3,6}$/.test(expectedDeviceId)) {
         throw new LocalIdentityError("Select an HonorPole before using local controls.");
     }

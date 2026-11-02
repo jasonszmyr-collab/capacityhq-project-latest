@@ -21,7 +21,7 @@ import { sendCommand, getStatus } from "../services/deviceService";
 // =======================
 // 🎨 UI HELPERS
 // =======================
-function getFlagVisual(position: string) {
+function getFlagVisual(position: unknown) {
   switch (position) {
     case "moving_up":
       return "⬆ Raising...";
@@ -38,14 +38,14 @@ function getFlagVisual(position: string) {
   }
 }
 
-function getAnimationClass(position: string) {
+function getAnimationClass(position: unknown) {
   if (position === "moving_up" || position === "moving_down") {
     return "animate-pulse";
   }
   return "";
 }
 
-function getPositionColor(position: string) {
+function getPositionColor(position: unknown) {
   switch (position) {
     case "up":
       return "text-green-400";
@@ -77,7 +77,7 @@ export default function FlagControlTest() {
   const [loadingIP, setLoadingIP] = useState(true);
   const [deviceOnline, setDeviceOnline] = useState(false);
 
-  const [status, setStatus] = useState<any>(null);
+  const [status, setStatus] = useState<{ wifi?: string | number | boolean; position?: unknown } | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);

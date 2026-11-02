@@ -9,7 +9,7 @@ class DeviceDiscovery {
             const response = await CapacitorHttp.request({ method: "GET", url: `${base}/status`, connectTimeout: 500, readTimeout: 500 });
             if (response.status !== 200) return null;
             const data = requireLocalIdentity(response.data, expectedDeviceId);
-            return { ip: base.replace(/^http:\/\//, ""), firmware: data.firmware, device: "HonorPole", deviceId: expectedDeviceId };
+            return { ip: base.replace(/^http:\/\//, ""), firmware: data.firmware as string, device: "HonorPole", deviceId: expectedDeviceId };
         } catch { return null; }
     }
     async discoverSaved(expectedDeviceId?: string): Promise<DeviceInfo | null> {

@@ -1395,7 +1395,7 @@ this.currentDeviceId =
         if (!this.localIP || !deviceId) return;
         try
         {
-            const status = await this.localRequest<any>("/status");
+            const status = await this.localRequest<Record<string, unknown>>("/status");
             this.requireSelection(deviceId, revision);
             this.telemetry.online = true;
 
@@ -1405,7 +1405,7 @@ this.currentDeviceId =
             if (status.firmware)
 {
     this.telemetry.firmware =
-        status.firmware;
+        status.firmware as string;
 }
 
 // Keep live flag position synchronized with ESP32 telemetry.
@@ -1900,7 +1900,7 @@ this.notifyTelemetrySubscribers();
         }
     }
 
-    private async checkedLocalStatus(ip: string, deviceId: string | null, revision: number): Promise<any> {
+    private async checkedLocalStatus(ip: string, deviceId: string | null, revision: number): Promise<Record<string, unknown>> {
         this.requireSelection(deviceId, revision);
         const response = await CapacitorHttp.request({
             method: "GET", url: `http://${ip}/status`, connectTimeout: 1000, readTimeout: 1000
