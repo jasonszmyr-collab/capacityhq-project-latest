@@ -101,6 +101,7 @@ export default function FlagControlTest() {
             return;
           }
         } catch {
+          // A saved address can be stale; continue with discovery below.
         }
       }
 

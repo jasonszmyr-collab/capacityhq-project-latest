@@ -4,7 +4,7 @@ import AppHeader from "../components/AppHeader";
 import BottomNav from "../components/BottomNav";
 import RecoveryPasswords from "../components/RecoveryPasswords";
 import cloudService from "../services/cloudService";
-import { protectedSetup, useLocalSetup, clearLocalSetup, getSetupDeviceId } from "../services/protectedSetup";
+import { protectedSetup, useLocalSetup as applyLocalSetup, clearLocalSetup, getSetupDeviceId } from "../services/protectedSetup";
 import { Clipboard } from "@capacitor/clipboard";
 
 export default function ProtectedSetup() {
@@ -54,7 +54,7 @@ export default function ProtectedSetup() {
         }
     }
     function useUsb() {
-        try { useLocalSetup(offlineDeviceId.trim().toUpperCase(), usbPassword.trim()); ++requestVersion.current; opening.current = false; setBusy(false); setUsbPassword(""); setError(""); setReveal(false); setCopyMessage(""); update(value => value + 1); }
+        try { applyLocalSetup(offlineDeviceId.trim().toUpperCase(), usbPassword.trim()); ++requestVersion.current; opening.current = false; setBusy(false); setUsbPassword(""); setError(""); setReveal(false); setCopyMessage(""); update(value => value + 1); }
         catch (err) { setError(err instanceof Error ? err.message : "Invalid setup password."); }
     }
     return <div className="relative min-h-screen">
@@ -84,7 +84,7 @@ export default function ProtectedSetup() {
             </div>}
             <RecoveryPasswords session={session} onUse={(id, password) => {
                 try {
-                    useLocalSetup(id, password);
+                    applyLocalSetup(id, password);
                     ++requestVersion.current; opening.current = false; setBusy(false);
                     setOfflineDeviceId(id); setUsbPassword(""); setError(""); setReveal(false); setCopyMessage("");
                     update(value => value + 1);

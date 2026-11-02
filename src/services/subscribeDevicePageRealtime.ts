@@ -68,9 +68,7 @@ export function subscribeDevicePageRealtime(opts: {
     () => onResults?.()
   );
 
-  channel.subscribe((status: string) => {
-    // optional: console.log("realtime status", status);
-  });
+  channel.subscribe();
 
   return {
     channel,

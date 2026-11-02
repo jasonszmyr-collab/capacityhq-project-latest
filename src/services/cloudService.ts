@@ -46,14 +46,6 @@ const WS_ENDPOINT =
     import.meta.env.VITE_WS_ENDPOINT ??
     "wss://capacityhq-project-latest.onrender.com/ws";
 
-const LOCAL_PORT = 80;
-
-const DEFAULT_DEVICE =
-    "honorpole.local";
-
-const AP_IP =
-    "192.168.4.1";
-
 const REQUEST_TIMEOUT = 10000;
 
 const HEARTBEAT_INTERVAL = 30000;

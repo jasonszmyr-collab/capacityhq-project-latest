@@ -40,7 +40,10 @@ export function matchingFirmwareReceipt(payload: unknown, request: DeliveryReque
         r.stage !== (r.accepted ? "accepted" : "rejected") ||
         typeof r.code !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(r.code) ||
         typeof r.message !== "string" || !r.message.trim() || r.message.length > 240 ||
-        /[\x00-\x1F\x7F]/.test(r.message) ||
+        Array.from(r.message).some(character => {
+            const code = character.charCodeAt(0);
+            return code < 32 || code === 127;
+        }) ||
         typeof r.receivedAt !== "number" || !Number.isFinite(r.receivedAt) ||
         r.receivedAt < (delivery.deliveredAt as number)) return null;
     return r as unknown as FirmwareReceipt;
@@ -66,7 +69,6 @@ export function watchCommandDelivery(
     let deliveryReported = false;
     let recovering = false;
     let next: ReturnType<typeof setTimeout> | undefined;
-    let deadline: ReturnType<typeof setTimeout> | undefined;
     let recoveryDeadline: ReturnType<typeof setTimeout> | undefined;
     const timeoutMs = options.timeoutMs ?? 30000;
     const totalMs = Math.max(timeoutMs, options.recoveryTimeoutMs ?? timeoutMs);
@@ -93,7 +95,7 @@ export function watchCommandDelivery(
         if (Date.now() >= expiresAt) { finishUnconfirmed(); return false; }
         return true;
     };
-    deadline = setTimeout(() => {
+    const deadline = setTimeout(() => {
         if (!current()) return;
         if (!canRecover) { finishUnconfirmed(); return; }
         recovering = true;

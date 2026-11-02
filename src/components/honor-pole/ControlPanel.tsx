@@ -128,8 +128,6 @@ export default function ControlPanel({
   onUpdate,
   isUpdating,
   deviceApiUrl,
-  deviceData: _deviceData,
-  directives: _directives,
 }: ControlPanelProps) {
   const [showTestConfirm, setShowTestConfirm] =
     useState(false);

@@ -1499,7 +1499,7 @@ if (devices.length > 0)
         try {
             const result = await cloudService.createShareCode(selectedDeviceId);
             setShareCode(result.code);
-        } catch (error) {
+        } catch {
             setShareError("Unable to create a share code. Check your connection and administrator access, then try again.");
         } finally {
             setSharing(false);
