@@ -1,9 +1,10 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
+import type { DevicePanelSubscriptionClient } from "./devicePanelTypes";
 
 type Unsubscribe = () => void;
 
 export function subscribeDevicePageRealtime(opts: {
-  supabase: any;
+  supabase: DevicePanelSubscriptionClient;
   deviceId: string;
   onDevices?: () => void;
   onDirective?: () => void;

@@ -1,3 +1,5 @@
+import type { DevicePanelReadClient, SetDevicePanels } from "./devicePanelTypes";
+
 /**
  * Optimized reload functions for individual device data panels.
  * These functions reload only specific parts of the device data,
@@ -5,48 +7,48 @@
  */
 
 export async function reloadDeviceOnly(
-  supabase: any,
+  supabase: DevicePanelReadClient,
   deviceId: string,
-  set: (updater: (prev: any) => any) => void
+  set: SetDevicePanels
 ) {
   const { data } = await supabase
     .from("devices")
     .select("*")
     .eq("device_id", deviceId)
     .maybeSingle();
-  set((prev: any) => ({ ...prev, device: data }));
+  set((prev) => ({ ...prev, device: data }));
 }
 
 export async function reloadDirectiveOnly(
-  supabase: any,
+  supabase: DevicePanelReadClient,
   deviceId: string,
-  set: (updater: (prev: any) => any) => void
+  set: SetDevicePanels
 ) {
   const { data } = await supabase
     .from("device_directives")
     .select("*")
     .eq("device_id", deviceId)
     .maybeSingle();
-  set((prev: any) => ({ ...prev, directive: data }));
+  set((prev) => ({ ...prev, directive: data }));
 }
 
 export async function reloadCalibrationOnly(
-  supabase: any,
+  supabase: DevicePanelReadClient,
   deviceId: string,
-  set: (updater: (prev: any) => any) => void
+  set: SetDevicePanels
 ) {
   const { data } = await supabase
     .from("device_calibration")
     .select("*")
     .eq("device_id", deviceId)
     .maybeSingle();
-  set((prev: any) => ({ ...prev, calibration: data }));
+  set((prev) => ({ ...prev, calibration: data }));
 }
 
 export async function reloadHeartbeatOnly(
-  supabase: any,
+  supabase: DevicePanelReadClient,
   deviceId: string,
-  set: (updater: (prev: any) => any) => void
+  set: SetDevicePanels
 ) {
   const { data } = await supabase
     .from("device_heartbeats")
@@ -55,13 +57,13 @@ export async function reloadHeartbeatOnly(
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  set((prev: any) => ({ ...prev, heartbeat: data }));
+  set((prev) => ({ ...prev, heartbeat: data }));
 }
 
 export async function reloadCommandsOnly(
-  supabase: any,
+  supabase: DevicePanelReadClient,
   deviceId: string,
-  set: (updater: (prev: any) => any) => void
+  set: SetDevicePanels
 ) {
   const { data } = await supabase
     .from("device_commands")
@@ -69,13 +71,13 @@ export async function reloadCommandsOnly(
     .eq("device_id", deviceId)
     .order("created_at", { ascending: false })
     .limit(50);
-  set((prev: any) => ({ ...prev, commands: data || [] }));
+  set((prev) => ({ ...prev, commands: data || [] }));
 }
 
 export async function reloadResultsOnly(
-  supabase: any,
+  supabase: DevicePanelReadClient,
   deviceId: string,
-  set: (updater: (prev: any) => any) => void
+  set: SetDevicePanels
 ) {
   const { data } = await supabase
     .from("device_command_results")
@@ -83,5 +85,5 @@ export async function reloadResultsOnly(
     .eq("device_id", deviceId)
     .order("created_at", { ascending: false })
     .limit(50);
-  set((prev: any) => ({ ...prev, results: data || [] }));
+  set((prev) => ({ ...prev, results: data || [] }));
 }

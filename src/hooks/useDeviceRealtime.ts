@@ -9,16 +9,10 @@ import {
   reloadResultsOnly,
 } from "../services/devicePanelReloaders";
 
-export interface DevicePanels {
-  device: any;
-  directive: any;
-  calibration: any;
-  heartbeat: any;
-  commands: any[];
-  results: any[];
-}
+import type { DevicePanelReadClient, DevicePanels, DeviceRealtimeClient, LoadedDevicePanels } from "../services/devicePanelTypes";
+export type { DevicePanels } from "../services/devicePanelTypes";
 
-export async function loadDevicePanels(supabase: any, deviceId: string): Promise<DevicePanels> {
+export async function loadDevicePanels(supabase: DevicePanelReadClient, deviceId: string): Promise<LoadedDevicePanels> {
   const [device, directive, calibration, heartbeat, commands, results] = await Promise.all([
     supabase.from("devices").select("*").eq("device_id", deviceId).maybeSingle(),
     supabase.from("device_directives").select("*").eq("device_id", deviceId).maybeSingle(),
@@ -54,7 +48,7 @@ export async function loadDevicePanels(supabase: any, deviceId: string): Promise
   };
 }
 
-export function useDeviceRealtimePage(supabase: any, deviceId: string) {
+export function useDeviceRealtimePage(supabase: DeviceRealtimeClient, deviceId: string) {
   const [data, setData] = useState<DevicePanels | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
