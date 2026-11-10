@@ -130,3 +130,22 @@ test('real HTTP device receipt is authenticated, correlated, retry-safe and read
  const status=await h.request('/api/device/HP-004/status',null,viewer);assert.equal(status.data.command.result.code,'calibration_required');assert.equal(status.data.command.result.commandId,queued.data.commandId);
  assert.equal((await h.request('/api/device/HP-004/status')).code,401);
 }));
+
+// Queued-authority checks exercised through real localhost HTTP sockets.
+const devicePoll={'x-device-secret':'local-device-fixture'};
+for(const policy of [{revoked:true},{authStatus:401},{membershipStatus:503}])test('real HTTP queued motion revalidation '+JSON.stringify(policy),()=>isolated(async h=>{
+ const q=await h.request('/api/device/HP-004/command',{command:'FULL'},viewer);assert.equal(q.code,200);
+ Object.assign(h.policy,policy);const r=await h.request('/control?deviceId=HP-004',null,devicePoll);
+ assert.equal(r.code,policy.membershipStatus?503:200);assert.equal(r.data.motor,'STOP');assert.equal(r.data.commandId,null);
+ Object.assign(h.policy,{revoked:false,authStatus:200,membershipStatus:200});
+ const retry=await h.request('/control?deviceId=HP-004',null,devicePoll);
+ assert.equal(retry.data.commandId,policy.membershipStatus?q.data.commandId:null);
+}));
+test('real HTTP queued STOP survives user revocation',()=>isolated(async h=>{
+ const q=await h.request('/api/device/HP-004/command',{command:'STOP'},viewer);h.policy.revoked=true;h.policy.authStatus=401;
+ const r=await h.request('/control?deviceId=HP-004',null,devicePoll);assert.equal(r.code,200);assert.equal(r.data.motor,'STOP');assert.equal(r.data.commandId,q.data.commandId);
+}));
+test('real HTTP revoked user cannot bypass queue guard with AUTO source',()=>isolated(async h=>{
+ await h.request('/control',{device_id:'HP-004',command:'FULL',source:'AUTO'},viewer);h.policy.revoked=true;
+ const r=await h.request('/control?deviceId=HP-004',null,devicePoll);assert.equal(r.data.commandId,null);
+}));

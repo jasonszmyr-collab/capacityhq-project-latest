@@ -44,6 +44,8 @@ app.use(express.static("public"));
 
 const deviceStatus = new Map();
 const commandsByDevice = new Map();
+// Credentials stay private, in memory only, until replacement/cancellation/delivery.
+const queuedAuthority = new WeakMap();
 
 function makeId(prefix = "id") {
   return `${prefix}-${Math.random()
@@ -561,7 +563,7 @@ function normalizeCommand(command) {
 // CENTRAL COMMAND QUEUE
 // =========================================================
 
-function queueCommand(deviceId, command, source = "MANUAL") {
+function queueCommand(deviceId, command, source = "MANUAL", authority) {
   const targetDeviceId =
     typeof deviceId === "string" && deviceId.trim()
       ? deviceId.trim()
@@ -592,14 +594,18 @@ function queueCommand(deviceId, command, source = "MANUAL") {
   targetState.commandDeliveredAt = null;
   targetState.commandResult = null;
 
-  commandsByDevice.set(targetDeviceId, {
+  const previous = commandsByDevice.get(targetDeviceId);
+  if (previous) queuedAuthority.delete(previous);
+  const queuedRecord = {
     commandId,
     motor,
     source,
     createdAt: now,
     deliveredAt: null,
     result: null
-  });
+  };
+  commandsByDevice.set(targetDeviceId, queuedRecord);
+  if (authority) queuedAuthority.set(queuedRecord, authority);
 
   console.log("------------------------------------");
   console.log("COMMAND QUEUED");
@@ -684,7 +690,8 @@ app.post("/auto/control", requireAutoControlAuth, (req, res) => {
   const queued = queueCommand(
     deviceId,
     motor,
-    "AUTO"
+    "AUTO",
+    {kind: "auto"}
   );
 
   if (!queued) return res.status(409).json({ success: false, error: "STOP is pending" });
@@ -742,7 +749,8 @@ app.post(
     const queued = queueCommand(
       deviceId,
       motor,
-      source
+      source,
+      {kind: "user", token: req.accessToken, userId: req.user.id}
     );
 
     if (!queued) return res.status(409).json({ success: false, error: "STOP is pending" });
@@ -829,7 +837,8 @@ const queued =
   queueCommand(
     deviceId,
     motor,
-    source
+    source,
+    {kind: "user", token: req.accessToken, userId: req.user.id}
   );
 
     if (!queued) return res.status(409).json({ success: false, error: "STOP is pending" });
@@ -860,7 +869,34 @@ app.get("/api/device/:deviceId/setup/:requestId", requireSupabaseAuth, requireDe
 app.get("/setup/poll", factoryRegistry.requirePairingAuth, phoneSetup.poll);
 app.post("/setup/result", factoryRegistry.requirePairingAuth, phoneSetup.acknowledge);
 
-app.get("/control", factoryRegistry.requireTelemetryAuth, (req, res) => {
+// Recheck the original actor rather than trusting a caller-supplied source label.
+async function checkQueuedAuthority(record, deviceId) {
+  const authority = queuedAuthority.get(record);
+  if (authority?.kind === "auto") return 200;
+  if (authority?.kind !== "user" || !authority.token || !authority.userId) return 403;
+  try {
+    const signal = AbortSignal.timeout(8000);
+    const headers = {Authorization: `Bearer ${authority.token}`,
+      apikey: process.env.SUPABASE_ANON_KEY || ""};
+    const auth = await fetch(`${SUPABASE_URL}/auth/v1/user`, {headers, signal});
+    if (!auth.ok) return [401, 403].includes(auth.status) ? 401 : 503;
+    const user = await auth.json();
+    if (!user?.id || user.id !== authority.userId) return 401;
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/device_users` +
+      `?device_id=eq.${encodeURIComponent(deviceId)}` +
+      `&user_id=eq.${encodeURIComponent(authority.userId)}&select=device_id,user_id,role`,
+      {headers, signal});
+    if (!response.ok) return 503;
+    const rows = await response.json();
+    if (!Array.isArray(rows)) return 503;
+    return rows.some(row => row?.device_id === deviceId &&
+      row?.user_id === authority.userId && ["admin", "viewer"].includes(row.role)) ? 200 : 403;
+  } catch {
+    return 503;
+  }
+}
+
+app.get("/control", factoryRegistry.requireTelemetryAuth, async (req, res) => {
   const deviceId =
     typeof req.query.device_id === "string" &&
     req.query.device_id.trim()
@@ -871,6 +907,31 @@ app.get("/control", factoryRegistry.requireTelemetryAuth, (req, res) => {
         : DEVICE_ID;
 
   const state = getDeviceState(deviceId);
+  const record = commandsByDevice.get(deviceId);
+  if (state.commandPending && state.motor !== "STOP") {
+    const access = await checkQueuedAuthority(record, deviceId);
+    // Any concurrent replacement or delivery invalidates this poll's snapshot.
+    // Leave the new record untouched for the next poll, including queued STOP.
+    if (!state.commandPending || commandsByDevice.get(deviceId) !== record ||
+        state.commandId !== record?.commandId) {
+      return res.json({deviceId, motor: "STOP", status: state.status,
+        lastSeen: state.lastSeen, commandId: null, source: null});
+    }
+    if (access === 503) {
+      return res.status(503).json({deviceId, motor: "STOP", commandId: null,
+        source: null, error: "Command authorization unavailable"});
+    }
+    if (access !== 200) {
+      queuedAuthority.delete(record);
+      record.cancelledAt = Date.now();
+      record.cancellationReason = access === 401 ? "authentication_expired" : "access_revoked";
+      state.commandPending = false;
+      state.motor = "STOP";
+      state.status = "command_cancelled";
+      // No delivery timestamp or firmware receipt is invented for cancellation.
+      broadcastState(deviceId);
+    }
+  }
 
   let motor = "STOP";
 
@@ -939,6 +1000,7 @@ app.get("/control", factoryRegistry.requireTelemetryAuth, (req, res) => {
       stored.commandId === deliveredCommandId
     ) {
       stored.deliveredAt = deliveredAt;
+      queuedAuthority.delete(stored);
 
       commandsByDevice.set(
         deviceId,
