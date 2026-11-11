@@ -13,7 +13,7 @@ function signature(r, secret) {
   return crypto.createHmac('sha256', secret).update(message(r)).digest('hex').toUpperCase();
 }
 // This channel never calls queueCommand, modifies motor state, or clears WiFi.
-function createSetupAccess({getState, now = Date.now, random = () =>
+function createSetupAccess({getState, checkAuthority, now = Date.now, random = () =>
   crypto.randomBytes(16).toString('hex').toUpperCase()}) {
   const boards = new Map();
   const sessions = new Map();
@@ -57,7 +57,7 @@ function createSetupAccess({getState, now = Date.now, random = () =>
     }
     if (sessions.size >= 1000) return res.status(503).json({success:false, error:'Setup capacity reached'});
     const s = {deviceId:id, boot:b.boot, requestId:random(), password:random(),
-      deadline:(b.clock + REQUEST_MS) >>> 0, owner:req.user.id,
+      deadline:(b.clock + REQUEST_MS) >>> 0, owner:req.user.id, token:req.accessToken,
       created:now(), expires:now()+REQUEST_MS, result:'PENDING', recovery:b.recovery === true};
     sessions.set(id, s);
     return res.status(202).json({success:true, deviceId:id, requestId:s.requestId});
@@ -75,7 +75,7 @@ function createSetupAccess({getState, now = Date.now, random = () =>
       ...(s.recovery && HEX.test(s.recoveryPassword || '') ? {recoveryPassword:s.recoveryPassword} : {})});
     return res.json(result);
   }
-  function poll(req, res) {
+  async function poll(req, res) {
     prune(); privateResponse(res);
     const id = req.deviceId;
     const boot = req.query.boot;
@@ -92,6 +92,25 @@ function createSetupAccess({getState, now = Date.now, random = () =>
     const s = sessions.get(id);
     if (!s || s.boot !== boot || s.result !== 'PENDING' || !idle(id))
       return res.json({success:true, setup:null});
+    // Revalidate the original administrator immediately before packet creation.
+    // Missing checks and authorization outages never deliver setup credentials.
+    let access = 503;
+    try {
+      if (typeof checkAuthority === 'function')
+        access = await checkAuthority({deviceId:id, userId:s.owner, token:s.token});
+    } catch { access = 503; }
+    // Authentication awaits can overlap expiry, reboot, replacement or delivery.
+    prune();
+    if (sessions.get(id) !== s || boards.get(id)?.boot !== boot ||
+        s.result !== 'PENDING' || !idle(id))
+      return res.json({success:true, setup:null});
+    if (access === 401 || access === 403) {
+      sessions.delete(id);
+      return res.json({success:true, setup:null});
+    }
+    if (access !== 200)
+      return res.status(503).json({success:false, setup:null,
+        error:'Setup authorization unavailable'});
     const packet = {deviceId:id, boot:s.boot, requestId:s.requestId,
       password:s.password, deadline:s.deadline, ...(s.recovery ? {recovery:true} : {})};
     packet.signature = signature(packet, secret.trim());
@@ -110,6 +129,7 @@ function createSetupAccess({getState, now = Date.now, random = () =>
         return res.status(400).json({success:false, error:'Recovery credential missing or invalid'});
       if (s.recovery && data.result === 'OPEN') s.recoveryPassword = data.recoveryPassword;
       s.result = data.result;
+      s.token = ''; // No further delivery authorization is needed after acknowledgement.
       // Conservatively account for request/delivery delay; retries never extend.
       s.expires = s.result === 'OPEN' ? s.created + WINDOW_MS : now() + 15000;
       if (s.result !== 'OPEN') s.password = '';

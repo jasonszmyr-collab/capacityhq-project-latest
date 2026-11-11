@@ -74,7 +74,11 @@ function hashPairingCode(pairingCode) {
 
 const { createFactoryRegistry } = require("./factory-registry.cjs");
 const { createSetupAccess } = require("./setup-access.cjs");
-const phoneSetup = createSetupAccess({getState: id => getDeviceState(id)});
+const phoneSetup = createSetupAccess({
+  getState: id => getDeviceState(id),
+  checkAuthority: ({deviceId, userId, token}) =>
+    checkActorAuthority({kind: "user", userId, token}, deviceId, ["admin"])
+});
 const factoryRegistry = createFactoryRegistry({
   supabaseUrl: SUPABASE_URL,
   serviceKey: SUPABASE_SERVICE_ROLE_KEY,
@@ -871,7 +875,10 @@ app.post("/setup/result", factoryRegistry.requirePairingAuth, phoneSetup.acknowl
 
 // Recheck the original actor rather than trusting a caller-supplied source label.
 async function checkQueuedAuthority(record, deviceId) {
-  const authority = queuedAuthority.get(record);
+  return checkActorAuthority(queuedAuthority.get(record), deviceId);
+}
+
+async function checkActorAuthority(authority, deviceId, roles = ["admin", "viewer"]) {
   if (authority?.kind === "auto") return 200;
   if (authority?.kind !== "user" || !authority.token || !authority.userId) return 403;
   try {
@@ -890,7 +897,7 @@ async function checkQueuedAuthority(record, deviceId) {
     const rows = await response.json();
     if (!Array.isArray(rows)) return 503;
     return rows.some(row => row?.device_id === deviceId &&
-      row?.user_id === authority.userId && ["admin", "viewer"].includes(row.role)) ? 200 : 403;
+      row?.user_id === authority.userId && roles.includes(row.role)) ? 200 : 403;
   } catch {
     return 503;
   }
