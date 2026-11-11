@@ -1563,31 +1563,32 @@ app.post(
     if (req.deviceMembership?.role !== "admin") {
       return res.status(403).json({ success: false, error: "Only a device administrator can share it" });
     }
-    if (!SUPABASE_SERVICE_ROLE_KEY) {
-      return res.status(503).json({ success: false, error: "Sharing is unavailable" });
-    }
+
     const code = crypto.randomBytes(9).toString("hex").toUpperCase().match(/.{6}/g).join("-");
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     try {
-      const response = await fetch(`${SUPABASE_URL}/rest/v1/honorpole_shares`, {
+      const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/honorpole_create_share_r1`, {
         method: "POST",
+        signal: AbortSignal.timeout(8000),
         headers: {
-          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${req.accessToken}`,
+          apikey: process.env.SUPABASE_ANON_KEY || "",
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          token_hash: hashPairingCode(code),
-          device_id: req.params.deviceId,
-          created_by: req.user.id,
-          expires_at: expiresAt
-        })
+        body: JSON.stringify({p_device_id:req.params.deviceId, p_token_hash:hashPairingCode(code)})
       });
       if (!response.ok) {
-        console.error("Share creation failed:", response.status);
-        return res.status(503).json({ success: false, error: "Unable to create share code" });
+        let failure;
+        try { failure = await response.json(); } catch {}
+        const status = {HP400:400, HP401:401, HP403:403, HP409:409}[failure?.code] || 503;
+        return res.status(status).json({success:false, error: status === 403
+          ? "Current device administrator required" : status === 409
+          ? "Device is unavailable for sharing" : "Unable to create share code"});
       }
-      return res.json({ deviceId: req.params.deviceId, code, expiresAt });
+      const result = await response.json();
+      if (result?.deviceId !== req.params.deviceId || typeof result.expiresAt !== "string" ||
+          !Number.isFinite(Date.parse(result.expiresAt)))
+        return res.status(503).json({success:false, error:"Unable to confirm share code creation"});
+      return res.json({deviceId:result.deviceId, code, expiresAt:result.expiresAt});
     } catch (error) {
       console.error("Share creation error:", error);
       return res.status(503).json({ success: false, error: "Unable to create share code" });
