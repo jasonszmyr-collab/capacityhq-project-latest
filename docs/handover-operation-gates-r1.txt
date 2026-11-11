@@ -1,0 +1,31 @@
+HonorPole Backend Operation Gates R1 - local validation only
+
+Run Run-All.ps1. It first runs the full candidate SQL in a network-disabled disposable PostgreSQL container, then creates a NEW local backend checkout from clean share checkpoint 77b672d, applies the candidate code, and runs source/localhost regressions. It commits/pushes/deploys nothing, uses no real accounts/controller, and changes no production environment setting. Docker postgres:17 and existing Node dependencies are reused without downloads or installations.
+
+Expected validation
+- PostgreSQL: 73 assertions total (prior 49 consent/restart checks + one disabled-confirmation default check + 21 operation authorization checks + two operation checks after another database restart).
+- Six explicitly observed lock-wait interleavings: prior four consent/share cases plus command and AUTO delivery checks racing confirmation.
+- Backend source: 319 cases (prior combined 278 + 41 gate/client/STOP concurrency cases).
+- Localhost HTTP/WebSocket: 49 cases (prior 40 + nine with generation gates enabled).
+- Assistant runtime: 296 available source cases passed, including all 41 new cases. The other 23 source checks need the original laptop SQL fixture. Real localhost execution requires laptop-installed express/ws. Database/transport validation for this new combined candidate is pending.
+
+Implementation
+New service-only AUTO and authenticated-user operation RPCs acquire the same device/control lock, reject frozen state or stale expected generation, and return the current generation. User identity comes from auth.uid(); viewer command access remains allowed and setup requires admin. No acting-user identifier is accepted from the caller. AUTO RPC execution is denied to app/anonymous roles.
+
+Confirmation RPC execution is revoked from authenticated users by default. The disposable test explicitly verifies that default, then grants it only inside its isolated database to exercise transitions. Production activation will require a separate reviewed grant after the full workflow is ready.
+
+The backend enables the new paths only when HANDOVER_GATES_ENABLED is exactly true. Default remains disabled. Enabled paths authorize before non-STOP command enqueue and again at delivery, including AUTO and the legacy command API. Queued actor metadata retains its original generation; missing/stale generations are never silently upgraded. Definite gate/access refusal cancels pending delivery, while authorization outages preserve retry. STOP remains deliverable during gate freeze/outage. A delayed enqueue grant cannot overwrite a newer queued command, including a STOP already delivered during the wait.
+
+Phone setup similarly authorizes creation and retains its generation, checks again at controller delivery, and gates retrieval of an OPEN session's credentials. Expired/replaced/rebooted sessions are rechecked after asynchronous authorization. Generation/access refusal discards the pending session; an outage withholds the packet and preserves retry. Old backend behavior remains covered with the feature flag disabled.
+
+The integration creates C:\dev\HonorPole-OperationGateIntegration-R1-* from the clean committed share candidate. It copies four backend modules, two new source test files, a draft migration and these notes. The draft migration includes consent/private gate state, the two gated share writers and the two operation RPCs. Source and evidence snapshots are hash-verified; both root/backend source layouts are verified because the retained and new tests use those layouts. No migration is executed against live Supabase.
+
+Acceptance boundaries
+PostgreSQL data/accounts are synthetic, auth.uid() claims are synthetic, and native database roles/locks are real. HTTP/WebSocket transport is real localhost with all Supabase calls mocked. This is not live JWT, controller or ownership-finalization acceptance. Direct private-table generation changes in fixtures simulate the future finalizer; they are not a production release API.
+
+Do not activate production confirmation or the feature flag yet. All serving instances must adopt compatible gates before confirmation can be exposed. In-flight responses issued before freeze and already delivered commands/setup packets still require the firmware quiescence barrier. The compiled recovery-rotation helper is not connected to such a barrier. STOP/queue drain, actual AP closure, recovery rotation, durable firmware inhibit, correlated device acknowledgement and release remain open.
+
+Owner/recipient app/backend routes, membership/legacy/factory/account-deletion writer coordination, verified device evidence, final remove-all ownership transaction, generation increment, cancellation recovery/release, restart orchestration and live acceptance remain open. There is deliberately no ownership finalizer or gate-release RPC in this candidate.
+
+Retained checkpoints
+Setup repair 3cf9e62; share integration 77b672d; share DB 31 cases/two lock waits; consent DB 49 checks/four lock waits; recovery rotation helper 20 host cases and ESP32 compile 1100941 flash/51028 RAM with no upload. Prior assertions are not new whole-ledger criteria when repeated for this changed candidate.

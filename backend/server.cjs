@@ -74,7 +74,14 @@ function hashPairingCode(pairingCode) {
 
 const { createFactoryRegistry } = require("./factory-registry.cjs");
 const { createSetupAccess } = require("./setup-access.cjs");
+// Enable only after the matching SQL and all serving backend instances are ready.
+const operationGates = process.env.HANDOVER_GATES_ENABLED === "true"
+  ? require("./handover-access.cjs").createOperationGates({supabaseUrl:SUPABASE_URL,
+      anonKey:process.env.SUPABASE_ANON_KEY || "",serviceKey:SUPABASE_SERVICE_ROLE_KEY,
+      fetchImpl:(...args)=>fetch(...args)}) : null;
 const phoneSetup = createSetupAccess({
+  ...(operationGates ? {authorizeGate:({deviceId,token,expectedGeneration}) =>
+    operationGates.user({deviceId,token,channel:"setup",expectedGeneration})} : {}),
   getState: id => getDeviceState(id),
   checkAuthority: ({deviceId, userId, token}) =>
     checkActorAuthority({kind: "user", userId, token}, deviceId, ["admin"])
@@ -567,7 +574,7 @@ function normalizeCommand(command) {
 // CENTRAL COMMAND QUEUE
 // =========================================================
 
-function queueCommand(deviceId, command, source = "MANUAL", authority) {
+async function queueCommand(deviceId, command, source = "MANUAL", authority) {
   const targetDeviceId =
     typeof deviceId === "string" && deviceId.trim()
       ? deviceId.trim()
@@ -578,6 +585,20 @@ function queueCommand(deviceId, command, source = "MANUAL", authority) {
 
   if (!motor) {
     return null;
+  }
+
+  if (operationGates && motor !== "STOP") {
+    const beforeAuthorization=commandsByDevice.get(targetDeviceId);
+    const grant = authority?.kind === "auto"
+      ? await operationGates.auto({deviceId:targetDeviceId})
+      : authority?.kind === "user"
+        ? await operationGates.user({deviceId:targetDeviceId,token:authority.token,channel:"command"})
+        : {status:403};
+    if (grant.status !== 200) return {denied:true,status:grant.status,
+      error:grant.status===503 ? "Control authorization unavailable" : "Control unavailable during ownership or access change"};
+    if (commandsByDevice.get(targetDeviceId)!==beforeAuthorization)
+      return {denied:true,status:409,error:"Control changed during authorization; retry"};
+    authority={...authority,generation:grant.generation};
   }
 
   // A STOP waiting for delivery must not be replaced by another phone.
@@ -658,7 +679,7 @@ app.get("/auto/status", requireAutoControlAuth, (req, res) => {
     command: { pending: targetState.commandPending === true }
   });
 });
-app.post("/auto/control", requireAutoControlAuth, (req, res) => {
+app.post("/auto/control", requireAutoControlAuth, async (req, res) => {
   const body = req.body || {};
 
   const requestedCommand =
@@ -691,14 +712,15 @@ app.post("/auto/control", requireAutoControlAuth, (req, res) => {
     });
   }
 
-  const queued = queueCommand(
+  const queued = await queueCommand(
     deviceId,
     motor,
     "AUTO",
     {kind: "auto"}
   );
 
-  if (!queued) return res.status(409).json({ success: false, error: "STOP is pending" });
+  if (queued?.denied) return res.status(queued.status).json({success:false,error:queued.error});
+    if (!queued) return res.status(409).json({ success: false, error: "STOP is pending" });
 
   res.json({
     success: true,
@@ -716,7 +738,7 @@ app.post(
   requireSupabaseAuth,
   requireDeviceAccess,
   requireDeviceCommandAccess,
-  (req, res) => {
+  async (req, res) => {
     const body = req.body || {};
 
     const requestedCommand =
@@ -750,13 +772,14 @@ app.post(
       });
     }
 
-    const queued = queueCommand(
+    const queued = await queueCommand(
       deviceId,
       motor,
       source,
       {kind: "user", token: req.accessToken, userId: req.user.id}
     );
 
+    if (queued?.denied) return res.status(queued.status).json({success:false,error:queued.error});
     if (!queued) return res.status(409).json({ success: false, error: "STOP is pending" });
 
     res.json({
@@ -781,7 +804,7 @@ app.post(
   requireSupabaseAuth,
   requireDeviceAccess,
   requireDeviceCommandAccess,
-  (req, res) => {
+  async (req, res) => {
     const deviceId =
   typeof req.params.deviceId === "string"
     ? req.params.deviceId.trim()
@@ -838,13 +861,14 @@ if (!deviceId) {
     }
 
 const queued =
-  queueCommand(
+  await queueCommand(
     deviceId,
     motor,
     source,
     {kind: "user", token: req.accessToken, userId: req.user.id}
   );
 
+    if (queued?.denied) return res.status(queued.status).json({success:false,error:queued.error});
     if (!queued) return res.status(409).json({ success: false, error: "STOP is pending" });
 
     res.json({
@@ -875,7 +899,15 @@ app.post("/setup/result", factoryRegistry.requirePairingAuth, phoneSetup.acknowl
 
 // Recheck the original actor rather than trusting a caller-supplied source label.
 async function checkQueuedAuthority(record, deviceId) {
-  return checkActorAuthority(queuedAuthority.get(record), deviceId);
+  const authority=queuedAuthority.get(record);
+  const status=await checkActorAuthority(authority, deviceId);
+  if(status!==200 || !operationGates)return status;
+  // Missing generations on records from before activation are never upgraded.
+  if(!Number.isSafeInteger(authority?.generation)||authority.generation<0)return 409;
+  const grant=authority.kind==="auto"
+    ? await operationGates.auto({deviceId,expectedGeneration:authority.generation})
+    : await operationGates.user({deviceId,token:authority.token,channel:"command",expectedGeneration:authority.generation});
+  return grant.status;
 }
 
 async function checkActorAuthority(authority, deviceId, roles = ["admin", "viewer"]) {
@@ -931,7 +963,7 @@ app.get("/control", factoryRegistry.requireTelemetryAuth, async (req, res) => {
     if (access !== 200) {
       queuedAuthority.delete(record);
       record.cancelledAt = Date.now();
-      record.cancellationReason = access === 401 ? "authentication_expired" : "access_revoked";
+      record.cancellationReason = access === 401 ? "authentication_expired" : access === 409 ? "handover_blocked" : "access_revoked";
       state.commandPending = false;
       state.motor = "STOP";
       state.status = "command_cancelled";

@@ -13,10 +13,21 @@ function signature(r, secret) {
   return crypto.createHmac('sha256', secret).update(message(r)).digest('hex').toUpperCase();
 }
 // This channel never calls queueCommand, modifies motor state, or clears WiFi.
-function createSetupAccess({getState, checkAuthority, now = Date.now, random = () =>
+function createSetupAccess({getState, checkAuthority, authorizeGate, now = Date.now, random = () =>
   crypto.randomBytes(16).toString('hex').toUpperCase()}) {
   const boards = new Map();
   const sessions = new Map();
+  async function gate(s,delivery) {
+    if (delivery && (!Number.isSafeInteger(s.generation)||s.generation<0)) return {status:409};
+    try {
+      const r=await authorizeGate({deviceId:s.deviceId,token:s.token,
+        ...(delivery?{expectedGeneration:s.generation}:{})});
+      if(r?.status!==200)return {status:[401,403,409].includes(r?.status)?r.status:503};
+      if(!Number.isSafeInteger(r.generation)||r.generation<0 ||
+          (delivery&&r.generation!==s.generation))return {status:503};
+      return r;
+    } catch {return {status:503};}
+  }
   function prune() {
     for (const [id, s] of sessions) if (s.expires <= now()) sessions.delete(id);
     for (const [id, b] of boards) if (b.seen + WINDOW_MS <= now()) boards.delete(id);
@@ -38,7 +49,7 @@ function createSetupAccess({getState, checkAuthority, now = Date.now, random = (
       String(s.state).toUpperCase() === 'IDLE' && s.commandPending === false &&
       s.motor === 'STOP' && s.status === 'idle';
   }
-  function open(req, res) {
+  async function open(req, res) {
     prune();
     if (!admin(req, res)) return res.status(403).json({success:false, error:'Device administrator required'});
     const id = req.params.deviceId;
@@ -46,6 +57,16 @@ function createSetupAccess({getState, checkAuthority, now = Date.now, random = (
     const b = boards.get(id);
     if (!b || now() - b.seen >= 10000) return res.status(409).json({success:false, error:'Phone setup firmware is not available on this pole'});
     if (!idle(id)) return res.status(409).json({success:false, error:'Pole must be online and idle with no pending command'});
+    let generation;
+    if (authorizeGate) {
+      const grant=await gate({deviceId:id,token:req.accessToken},false);
+      if (grant.status!==200) return res.status(grant.status).json({success:false,error:'Setup authorization unavailable or blocked'});
+      generation=grant.generation;
+      prune();
+      const fresh=boards.get(id);
+      if (!fresh || fresh.boot!==b.boot || now()-fresh.seen>=10000 || !idle(id))
+        return res.status(409).json({success:false,error:'Controller setup state changed; retry'});
+    }
     if (sessions.has(id)) {
       const existing = sessions.get(id);
       return res.status(409).json({
@@ -57,17 +78,26 @@ function createSetupAccess({getState, checkAuthority, now = Date.now, random = (
     }
     if (sessions.size >= 1000) return res.status(503).json({success:false, error:'Setup capacity reached'});
     const s = {deviceId:id, boot:b.boot, requestId:random(), password:random(),
-      deadline:(b.clock + REQUEST_MS) >>> 0, owner:req.user.id, token:req.accessToken,
+      deadline:((boards.get(id).clock) + REQUEST_MS) >>> 0, owner:req.user.id, token:req.accessToken, generation,
       created:now(), expires:now()+REQUEST_MS, result:'PENDING', recovery:b.recovery === true};
     sessions.set(id, s);
     return res.status(202).json({success:true, deviceId:id, requestId:s.requestId});
   }
-  function status(req, res) {
+  async function status(req, res) {
     prune();
     if (!admin(req, res)) return res.status(403).json({success:false, error:'Device administrator required'});
     const s = sessions.get(req.params.deviceId);
     if (!s || s.owner !== req.user.id || s.requestId !== req.params.requestId)
       return res.status(404).json({success:false, error:'Setup request not found or expired'});
+    if (authorizeGate) {
+      const grant=await gate({deviceId:s.deviceId,token:req.accessToken,generation:s.generation},true);
+      prune();
+      if (sessions.get(s.deviceId)!==s) return res.status(404).json({success:false,error:'Setup request expired'});
+      if (grant.status!==200) {
+        if ([401,403,409].includes(grant.status)) sessions.delete(s.deviceId);
+        return res.status(grant.status).json({success:false,error:'Setup authorization unavailable or blocked'});
+      }
+    }
     const result = {success:true, deviceId:s.deviceId, requestId:s.requestId, result:s.result};
     // Reveal only after the board acknowledges that its protected AP is running.
     if (s.result === 'OPEN') Object.assign(result, {ssid:`HonorPole-Setup-${s.deviceId}`,
@@ -99,12 +129,14 @@ function createSetupAccess({getState, checkAuthority, now = Date.now, random = (
       if (typeof checkAuthority === 'function')
         access = await checkAuthority({deviceId:id, userId:s.owner, token:s.token});
     } catch { access = 503; }
+    if (access===200 && authorizeGate)
+      access=(await gate({deviceId:id,token:s.token,generation:s.generation},true)).status;
     // Authentication awaits can overlap expiry, reboot, replacement or delivery.
     prune();
     if (sessions.get(id) !== s || boards.get(id)?.boot !== boot ||
         s.result !== 'PENDING' || !idle(id))
       return res.json({success:true, setup:null});
-    if (access === 401 || access === 403) {
+    if (access === 401 || access === 403 || access === 409) {
       sessions.delete(id);
       return res.json({success:true, setup:null});
     }
