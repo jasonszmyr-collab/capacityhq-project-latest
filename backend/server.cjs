@@ -1373,7 +1373,7 @@ console.table({
 
 app.get("/status", (req, res) => {
   res.json({
-    deviceId,
+    deviceId: DEVICE_ID,
 
     online: state.online,
 status: state.status,
