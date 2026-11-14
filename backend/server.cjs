@@ -86,6 +86,11 @@ const phoneSetup = createSetupAccess({
   checkAuthority: ({deviceId, userId, token}) =>
     checkActorAuthority({kind: "user", userId, token}, deviceId, ["admin"])
 });
+// Deliberately independent of ordinary control/setup routes; defaults disabled.
+const handoverDelivery = process.env.HANDOVER_TRANSPORT_ENABLED === "true" &&
+    process.env.HANDOVER_GATES_ENABLED === "true" && process.env.DEVICE_REGISTRY_ENABLED === "true"
+  ? require("./handover-delivery.cjs").createHandoverDelivery({supabaseUrl:SUPABASE_URL,
+      serviceKey:SUPABASE_SERVICE_ROLE_KEY,fetchImpl:(...args)=>fetch(...args)}) : null;
 const factoryRegistry = createFactoryRegistry({
   supabaseUrl: SUPABASE_URL,
   serviceKey: SUPABASE_SERVICE_ROLE_KEY,
@@ -164,6 +169,31 @@ async function requireSupabaseAuth(req, res, next) {
       error: "Authentication service unavailable"
     });
   }
+}
+
+// Keep API routing available during recovery; stop only NEW transfers on rollback.
+// Both flags default off. Database policy independently defaults to disabled.
+if (process.env.HANDOVER_APP_API_ENABLED === "true" &&
+    process.env.HANDOVER_GATES_ENABLED === "true" &&
+    process.env.HANDOVER_TRANSPORT_ENABLED === "true" &&
+    process.env.DEVICE_REGISTRY_ENABLED === "true") {
+  const appHandover = require("./handover-app.cjs").createHandoverApp({
+    supabaseUrl: SUPABASE_URL, anonKey: process.env.SUPABASE_ANON_KEY || "",
+    newTransfers: process.env.HANDOVER_APP_NEW_TRANSFERS_ENABLED === "true",
+    fetchImpl: (...args) => fetch(...args)
+  });
+  app.get("/api/handover/capabilities", requireSupabaseAuth, appHandover.capabilities);
+  app.get("/api/handover/invitations", requireSupabaseAuth, appHandover.list);
+  app.post("/api/handover/invitations", requireSupabaseAuth, appHandover.create);
+  app.post("/api/handover/accept", requireSupabaseAuth, appHandover.accept);
+  app.get("/api/handover/invitations/:invitationId", requireSupabaseAuth, appHandover.status);
+  app.post("/api/handover/invitations/:invitationId/confirm", requireSupabaseAuth, appHandover.confirm);
+  app.post("/api/handover/invitations/:invitationId/cancel", requireSupabaseAuth, appHandover.cancel);
+} else {
+  app.get("/api/handover/capabilities", requireSupabaseAuth, (_req,res) => {
+    res.setHeader?.("Cache-Control", "no-store");
+    res.json({available:false,canStart:false});
+  });
 }
 
 function requireAutoControlAuth(req, res, next) {
@@ -417,31 +447,46 @@ async function authorizeWebSocket(info, done) {
   }
 }
 
-// Coalesce overlapping requests per socket. No telemetry is sent while checking;
-// after approval, construct the latest snapshot instead of replaying queued data.
+// Coalesce pending telemetry, but never authorize a newer snapshot with an
+// older membership read. Capture immutable bytes BEFORE each access check.
+// A broadcast arriving during that check requires another check for its snapshot.
 function refreshWebSocketAccess(ws, sendTelemetry = false) {
   const access = webSocketAccess.get(ws);
   if (!access || ws.readyState !== WebSocket.OPEN) return Promise.resolve();
-  access.sendTelemetry = access.sendTelemetry || sendTelemetry;
+  if (sendTelemetry) {
+    access.telemetry = {payload: JSON.stringify({type: 'telemetry', deviceId: access.deviceId,
+      data: {...getDeviceState(access.deviceId), deviceId: access.deviceId}})};
+  }
   if (access.pending) return access.pending;
   access.pending = (async () => {
-    const result = await checkWebSocketAccess(access.token, access.deviceId, access.userId);
-    if (webSocketAccess.get(ws) !== access || ws.readyState !== WebSocket.OPEN) return;
-    if (result.status !== 200) {
-      webSocketAccess.delete(ws);
-      ws.close(result.status === 503 ? 1013 : 1008,
-        result.status === 503 ? 'Authorization unavailable' : 'Device access no longer authorized');
-      return;
+    try {
+      while (webSocketAccess.get(ws) === access && ws.readyState === WebSocket.OPEN) {
+        const telemetry = access.telemetry;
+        const result = await checkWebSocketAccess(access.token, access.deviceId, access.userId);
+        if (webSocketAccess.get(ws) !== access || ws.readyState !== WebSocket.OPEN) return;
+        if (result.status !== 200) {
+          webSocketAccess.delete(ws);
+          ws.close(result.status === 503 ? 1013 : 1008,
+            result.status === 503 ? 'Authorization unavailable' : 'Device access no longer authorized');
+          return;
+        }
+        if (access.telemetry !== telemetry) continue;
+        if (telemetry) {
+          access.telemetry = null;
+          ws.send(telemetry.payload);
+        }
+        // Preserve demand even if a transport callback synchronously refreshes.
+        if (!access.telemetry) return;
+      }
+    } catch {
+      if (webSocketAccess.get(ws) === access) {
+        webSocketAccess.delete(ws);
+        if (ws.readyState === WebSocket.OPEN) ws.close(1013, 'Authorization unavailable');
+      }
+    } finally {
+      access.pending = null;
     }
-    if (access.sendTelemetry) {
-      access.sendTelemetry = false;
-      ws.send(JSON.stringify({type: 'telemetry', deviceId: access.deviceId,
-        data: {...getDeviceState(access.deviceId), deviceId: access.deviceId}}));
-    }
-  })().catch(() => {
-    webSocketAccess.delete(ws);
-    if (ws.readyState === WebSocket.OPEN) ws.close(1013, 'Authorization unavailable');
-  }).finally(() => {access.pending = null;});
+  })();
   return access.pending;
 }
 const wss = new WebSocket.Server({server, verifyClient: authorizeWebSocket});
@@ -896,6 +941,13 @@ app.post("/api/device/:deviceId/setup", requireSupabaseAuth, requireDeviceAccess
 app.get("/api/device/:deviceId/setup/:requestId", requireSupabaseAuth, requireDeviceAccess, phoneSetup.status);
 app.get("/setup/poll", factoryRegistry.requirePairingAuth, phoneSetup.poll);
 app.post("/setup/result", factoryRegistry.requirePairingAuth, phoneSetup.acknowledge);
+// Each service RPC authenticates current enrolled credentials under the device
+// lock. There is no cached/legacy telemetry bypass on this channel.
+if (handoverDelivery) {
+  app.post("/handover/poll", handoverDelivery.poll);
+  app.post("/handover/ack", handoverDelivery.acknowledge);
+}
+
 
 // Recheck the original actor rather than trusting a caller-supplied source label.
 async function checkQueuedAuthority(record, deviceId) {

@@ -11,13 +11,12 @@ const safeEqual = (a, b) => typeof a === 'string' && typeof b === 'string' &&
 
 function createFactoryRegistry({supabaseUrl, serviceKey, anonKey, legacySecrets = {},
     enabled = false, factorySecret = '', legacyTelemetryIds = [],
-    fetchImpl = globalThis.fetch, now = Date.now}) {
+    fetchImpl = globalThis.fetch}) {
     const legacyIds = new Set(legacyTelemetryIds);
     if ([...legacyIds].some(id => !DEVICE_PATTERN.test(id))) {
         throw new Error('Invalid legacy telemetry device list');
     }
-    const cache = new Map();
-    const pending = new Map();
+    let activeLookups = 0;
     async function rpc(name, body, token = serviceKey, apiKey = serviceKey) {
         if (!token || !apiKey) throw new Error('Registry credentials unavailable');
         const response = await fetchImpl(`${supabaseUrl}/rest/v1/rpc/${name}`, {
@@ -34,11 +33,11 @@ function createFactoryRegistry({supabaseUrl, serviceKey, anonKey, legacySecrets 
         return data;
     }
     async function lookup(deviceId) {
-        const hit = cache.get(deviceId);
-        if (hit && hit.expires > now()) return hit.value;
-        if (pending.has(deviceId)) return pending.get(deviceId);
-        if (pending.size >= 100) throw new Error('Registry lookup capacity reached');
-        const request = (async () => {
+        // Admission is based on this request's fresh database response. No
+        // positive/negative authority cache and no shared in-flight lookup.
+        if (activeLookups >= 100) throw new Error('Registry lookup capacity reached');
+        activeLookups++;
+        try {
             const rows = await rpc('honorpole_factory_lookup', {p_device_id: deviceId});
             if (!Array.isArray(rows) || rows.length > 1) throw new Error('Invalid registry response');
             const value = rows[0] || null;
@@ -46,12 +45,8 @@ function createFactoryRegistry({supabaseUrl, serviceKey, anonKey, legacySecrets 
                 !/^[0-9a-f]{64}$/.test(value.secret_hash) || typeof value.enabled !== 'boolean')) {
                 throw new Error('Invalid registry record');
             }
-            if (cache.size >= 1000) cache.delete(cache.keys().next().value);
-            cache.set(deviceId, {value, expires: now() + (value ? 10000 : 2000)});
             return value;
-        })();
-        pending.set(deviceId, request);
-        try { return await request; } finally { pending.delete(deviceId); }
+        } finally { activeLookups--; }
     }
     function providedSecret(req) {
         const raw = req.headers['x-device-secret'];
@@ -126,7 +121,6 @@ function createFactoryRegistry({supabaseUrl, serviceKey, anonKey, legacySecrets 
                 typeof data.claimed !== 'boolean' || !Number.isFinite(Date.parse(data.expiresAt))) {
                 throw new Error('Invalid registration result');
             }
-            cache.delete(data.deviceId);
             return res.status(data.created ? 201 : 200).json({success: true,
                 deviceId: data.deviceId, created: data.created,
                 expiresAt: data.expiresAt, claimed: data.claimed});
@@ -164,7 +158,6 @@ function createFactoryRegistry({supabaseUrl, serviceKey, anonKey, legacySecrets 
                 data.claimed !== true || typeof data.migrated !== 'boolean') {
                 throw new Error('Invalid migration result');
             }
-            cache.delete(deviceId);
             return res.status(200).json({success: true, deviceId,
                 created: false, claimed: true, migrated: data.migrated});
         } catch (error) {
