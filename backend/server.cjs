@@ -171,6 +171,22 @@ async function requireSupabaseAuth(req, res, next) {
   }
 }
 
+const preferencesAuto = process.env.DEVICE_PREFERENCES_ENABLED === "true"
+  ? require("./preference-auto.cjs").createPreferenceAuto({supabaseUrl: SUPABASE_URL,
+      serviceKey: SUPABASE_SERVICE_ROLE_KEY, fetchImpl: (...args) => fetch(...args)}) : null;
+
+// Versioned preferences: adopted only through the separately reviewed cutover.
+// Default OFF; enabling this alone does not make handover or AUTO ready.
+if (process.env.DEVICE_PREFERENCES_ENABLED === "true") {
+  const preferences = require("./preference-authority.cjs").createPreferenceAuthority({
+    supabaseUrl: SUPABASE_URL, anonKey: process.env.SUPABASE_ANON_KEY || "",
+    automaticMovementEnabled: process.env.AUTO_PREFERENCE_COMMANDS_ENABLED === "true",
+    fetchImpl: (...args) => fetch(...args)
+  });
+  app.get("/api/device/:deviceId/preferences", requireSupabaseAuth, preferences.get);
+  app.post("/api/device/:deviceId/preferences", requireSupabaseAuth, preferences.write);
+}
+
 // Keep API routing available during recovery; stop only NEW transfers on rollback.
 // Both flags default off. Database policy independently defaults to disabled.
 if (process.env.HANDOVER_APP_API_ENABLED === "true" &&
@@ -179,7 +195,7 @@ if (process.env.HANDOVER_APP_API_ENABLED === "true" &&
     process.env.DEVICE_REGISTRY_ENABLED === "true") {
   const appHandover = require("./handover-app.cjs").createHandoverApp({
     supabaseUrl: SUPABASE_URL, anonKey: process.env.SUPABASE_ANON_KEY || "",
-    newTransfers: process.env.HANDOVER_APP_NEW_TRANSFERS_ENABLED === "true",
+    newTransfers: process.env.HANDOVER_APP_NEW_TRANSFERS_ENABLED === "true" && process.env.DEVICE_PREFERENCES_ENABLED === "true",
     fetchImpl: (...args) => fetch(...args)
   });
   app.get("/api/handover/capabilities", requireSupabaseAuth, appHandover.capabilities);
@@ -632,6 +648,17 @@ async function queueCommand(deviceId, command, source = "MANUAL", authority) {
     return null;
   }
 
+  if (!preferencesAuto && authority?.kind === "auto" && authority.preferences !== undefined && motor !== "STOP")
+    return {denied:true,status:503,error:"Versioned AUTO preferences are unavailable"};
+  if (preferencesAuto && authority?.kind === "auto" && motor !== "STOP" && process.env.AUTO_PREFERENCE_COMMANDS_ENABLED !== "true")
+    return {denied:true,status:503,error:"Automatic movement is not enabled"};
+  if (preferencesAuto && authority?.kind === "auto" && motor !== "STOP") {
+    const beforePreferences = commandsByDevice.get(targetDeviceId);
+    const grant = await preferencesAuto.check(targetDeviceId, authority.preferences);
+    if (grant.status !== 200) return {denied:true,status:grant.status,error:"AUTO settings changed or are unavailable"};
+    if (commandsByDevice.get(targetDeviceId)!==beforePreferences) return {denied:true,status:409,error:"Control changed during authorization"};
+    authority={...authority,generation:grant.generation,preferences:{generation:authority.preferences.generation,revision:authority.preferences.revision}};
+  }
   if (operationGates && motor !== "STOP") {
     const beforeAuthorization=commandsByDevice.get(targetDeviceId);
     const grant = authority?.kind === "auto"
@@ -643,6 +670,8 @@ async function queueCommand(deviceId, command, source = "MANUAL", authority) {
       error:grant.status===503 ? "Control authorization unavailable" : "Control unavailable during ownership or access change"};
     if (commandsByDevice.get(targetDeviceId)!==beforeAuthorization)
       return {denied:true,status:409,error:"Control changed during authorization; retry"};
+    if (preferencesAuto && authority?.kind === "auto" && authority.preferences?.generation !== grant.generation)
+      return {denied:true,status:409,error:"Ownership generation changed"};
     authority={...authority,generation:grant.generation};
   }
 
@@ -702,6 +731,22 @@ async function queueCommand(deviceId, command, source = "MANUAL", authority) {
 
 // Authenticated, device-specific telemetry for the scheduled AUTO evaluator.
 // Never fall back to HP-001 if a device_id is missing or invalid.
+app.get("/auto/preference-devices", requireAutoControlAuth, async (_req,res) => {
+  res.setHeader("Cache-Control","no-store");
+  if(!preferencesAuto)return res.status(503).json({error:"Device preferences unavailable"});
+  const result=await preferencesAuto.devices();
+  if(result.status!==200)return res.status(result.status).json({error:"Device preferences unavailable"});
+  return res.json(result.value);
+});
+app.get("/auto/preferences", requireAutoControlAuth, async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const d=req.query.device_id;
+  if(typeof d!=="string" || !/^HP-[0-9]{3,6}$/.test(d))return res.status(400).json({error:"Valid device ID required"});
+  if(!preferencesAuto)return res.status(503).json({error:"Device preferences unavailable"});
+  const result=await preferencesAuto.read(d);
+  if(result.status!==200)return res.status(result.status).json({error:"Device preferences unavailable"});
+  return res.json({...result.value,automatic_movement_enabled:process.env.AUTO_PREFERENCE_COMMANDS_ENABLED === "true"});
+});
 app.get("/auto/status", requireAutoControlAuth, (req, res) => {
   const deviceId = typeof req.query.device_id === "string"
     ? req.query.device_id.trim() : "";
@@ -761,7 +806,7 @@ app.post("/auto/control", requireAutoControlAuth, async (req, res) => {
     deviceId,
     motor,
     "AUTO",
-    {kind: "auto"}
+    {kind: "auto", preferences: body.preferences}
   );
 
   if (queued?.denied) return res.status(queued.status).json({success:false,error:queued.error});
@@ -953,7 +998,13 @@ if (handoverDelivery) {
 async function checkQueuedAuthority(record, deviceId) {
   const authority=queuedAuthority.get(record);
   const status=await checkActorAuthority(authority, deviceId);
-  if(status!==200 || !operationGates)return status;
+  if(status!==200)return status;
+  if(preferencesAuto && authority?.kind === "auto") {
+    if(process.env.AUTO_PREFERENCE_COMMANDS_ENABLED !== "true")return 409;
+    const currentPreferences=await preferencesAuto.check(deviceId,authority.preferences);
+    if(currentPreferences.status!==200)return currentPreferences.status;
+  }
+  if(!operationGates)return status;
   // Missing generations on records from before activation are never upgraded.
   if(!Number.isSafeInteger(authority?.generation)||authority.generation<0)return 409;
   const grant=authority.kind==="auto"
@@ -1921,6 +1972,15 @@ const state = getDeviceState(deviceId);
 
       deviceName:
         "HonorPole",
+
+      // Raw fields preserve the stopped/fresh telemetry interpretation used by web clients.
+      position: state.position,
+      target: state.target,
+      full: state.full,
+      half: state.half,
+      motor: state.motor,
+      status: state.status,
+      lastSeen: state.lastSeen,
 
       currentPosition:
         state.position || 0,

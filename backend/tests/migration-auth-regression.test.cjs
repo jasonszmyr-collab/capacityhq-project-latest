@@ -59,21 +59,21 @@ test('Enrollment clears the cached legacy lookup before next device request',asy
   const denied=response();await r.requireTelemetryAuth(device,denied,()=>assert.fail('stale bypass'));
   assert.equal(denied.code,401);assert.equal(lookups,2);
 });
-test('Protected phone setup polls, signs, acknowledges, and reveals password only to admin',()=>{
+test('Protected phone setup polls, signs, acknowledges, and reveals password only to admin',async()=>{
   const now=100000;let randomCount=0;
-  const setup=createSetupAccess({now:()=>now,random:()=> (++randomCount===1?'C':'D').repeat(32),
+  const setup=createSetupAccess({checkAuthority:async actor=>{assert.deepEqual(actor,{deviceId:'HP-001',userId:'owner',token:'fixture-owner-token'});return 200;},now:()=>now,random:()=> (++randomCount===1?'C':'D').repeat(32),
     getState:()=>({online:true,lastSeen:now,state:'IDLE',commandPending:false,motor:'STOP',status:'idle'})});
   const boot='E'.repeat(32),deviceId='HP-001';
-  setup.poll({deviceId,query:{boot,clock:'1000'},headers:{'x-device-secret':key}},response());
-  const admin={params:{deviceId},user:{id:'owner'},deviceMembership:{user_id:'owner',device_id:deviceId,role:'admin'}};
-  const opened=response();setup.open(admin,opened);assert.equal(opened.code,202);
+  await setup.poll({deviceId,query:{boot,clock:'1000'},headers:{'x-device-secret':key}},response());
+  const admin={accessToken:'fixture-owner-token',params:{deviceId},user:{id:'owner'},deviceMembership:{user_id:'owner',device_id:deviceId,role:'admin'}};
+  const opened=response();await setup.open(admin,opened);assert.equal(opened.code,202);
   const requestId=opened.body.requestId;admin.params.requestId=requestId;
-  const pending=response();setup.status(admin,pending);assert.equal(pending.body.password,undefined);
-  const poll=response();setup.poll({deviceId,query:{boot,clock:'1100'},headers:{'x-device-secret':key}},poll);
+  const pending=response();await setup.status(admin,pending);assert.equal(pending.body.password,undefined);
+  const poll=response();await setup.poll({deviceId,query:{boot,clock:'1100'},headers:{'x-device-secret':key}},poll);
   assert.equal(poll.body.setup.signature,signature(poll.body.setup,key));
   const ack=response();setup.acknowledge({deviceId,body:{boot,requestId,result:'OPEN'}},ack);assert.equal(ack.code,200);
-  const ready=response();setup.status(admin,ready);assert.equal(ready.body.ssid,'HonorPole-Setup-HP-001');assert.equal(ready.body.password,'D'.repeat(32));
-  const denied=response();setup.status({...admin,deviceMembership:{...admin.deviceMembership,role:'viewer'}},denied);assert.equal(denied.code,403);
+  const ready=response();await setup.status(admin,ready);assert.equal(ready.body.ssid,'HonorPole-Setup-HP-001');assert.equal(ready.body.password,'D'.repeat(32));
+  const denied=response();await setup.status({...admin,deviceMembership:{...admin.deviceMembership,role:'viewer'}},denied);assert.equal(denied.code,403);
 });
 test('Migration route is registered once; all protected phone setup routes retain their middleware',()=>{
   const server=fs.readFileSync(path.join(__dirname,'../server.cjs'),'utf8');
