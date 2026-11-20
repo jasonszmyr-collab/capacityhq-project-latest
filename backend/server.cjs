@@ -1967,6 +1967,7 @@ const state = getDeviceState(deviceId);
       hardware:
         "ESP32-S3",
 
+      deviceId,
       serialNumber:
         deviceId,
 

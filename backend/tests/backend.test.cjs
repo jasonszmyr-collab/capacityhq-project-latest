@@ -68,7 +68,16 @@ test('unauthorized WebSocket connection sends no telemetry',()=>{const h=harness
 async function upgrade(h,url){const req={url};let result;await h.wss.config.verifyClient({req},(...args)=>{result=args});assert.ok(result);return {result,req}}
 for(const body of [{motor:'FULL',device_id:'bad'},{motor:'FULL',device_id:42},{motor:'FULL',device_id:'HP-004',deviceId:'HP-001'}])test('AUTO rejects invalid/conflicting ID '+JSON.stringify(body),async()=>{const h=harness();assert.equal((await h.request('POST','/auto/control',{headers:auto,body})).code,400);assert.equal(h.commandsByDevice.size,0)});
 test('AUTO explicit target remains isolated',async()=>{const h=harness();assert.equal((await h.request('POST','/auto/control',{headers:auto,body:{motor:'FULL',device_id:'HP-004'}})).code,200);assert.equal(h.getDeviceState('HP-001').commandPending,false);assert.equal(h.getDeviceState('HP-004').commandPending,true)});
-test('viewer retains device status read access',async()=>{const h=harness({role:'viewer'});assert.equal((await h.request('GET','/api/device/:deviceId/status',{headers:auth,params:{deviceId:'HP-004'}})).code,200)});
+test('viewer status identifies the requested device for web and existing clients', async () => {
+  const h = harness({role: 'viewer'});
+  const response = await h.request('GET', '/api/device/:deviceId/status', {
+    headers: auth,
+    params: {deviceId: 'HP-004'},
+  });
+  assert.equal(response.code, 200);
+  assert.equal(response.data.deviceId, 'HP-004');
+  assert.equal(response.data.serialNumber, 'HP-004');
+});
 test('shared viewer can use legacy command endpoint for assigned pole',async()=>{const h=harness({role:'viewer'});assert.equal((await h.request('POST','/control',{headers:auth,body:{device_id:'HP-004',command:'STOP'}})).code,200);assert.equal(h.getDeviceState('HP-004').motor,'STOP');assert.equal(h.getDeviceState('HP-001').commandPending,false)});
 for(const role of ['owner','unknown',null])test('unapproved command role fails closed '+role,async()=>{const h=harness({role});assert.equal((await send(h)).code,403);assert.equal(h.commandsByDevice.size,0)});
 for(const url of ['/ws','/ws?token=t','/ws?token=t&deviceId=bad','/ws?token=t&deviceId=HP-004&deviceId=HP-001','/other?token=t&deviceId=HP-004'])test('WebSocket rejects incomplete/ambiguous subscription '+url,async()=>{const h=harness();assert.equal((await upgrade(h,url)).result[0],false);assert.equal(h.calls.length,0)});
