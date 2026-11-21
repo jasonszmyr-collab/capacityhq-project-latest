@@ -42,10 +42,13 @@ function createPreferenceAuthority({supabaseUrl,anonKey,fetchImpl=fetch,automati
    return view(value,d);
   }catch(e){throw {status:[400,401,403,409].includes(e?.status)?e.status:503}}
  }
+ const movementEnabledFor=d=>typeof automaticMovementEnabled==='function'
+  ? automaticMovementEnabled(d)===true
+  : automaticMovementEnabled===true;
  const failure=(res,e)=>res.status([400,401,403,409].includes(e?.status)?e.status:503).json({success:false,error:({400:'Check the preference request.',401:'Sign in again.',403:'Current device access is required.',409:'The pole or its settings changed. Refresh before saving.'})[e?.status]||'Device preferences are temporarily unavailable.'});
  const action=fn=>async(req,res)=>{try{return await fn(req,res,context(req,res))}catch(e){return failure(res,e)}};
  return {
-  get:action(async(req,res,d)=>res.json({...await rpc(req,'honorpole_preferences_read_r1',{p_device:d},d),automatic_movement_enabled:automaticMovementEnabled===true})),
+  get:action(async(req,res,d)=>res.json({...await rpc(req,'honorpole_preferences_read_r1',{p_device:d},d),automatic_movement_enabled:movementEnabledFor(d)})),
   write:action(async(req,res,d)=>{
    const b=req.body;
    if(!(exact(b,['operationId','generation','revision','kind','value'])||(exact(b,['device_id','operationId','generation','revision','kind','value'])&&b.device_id===d))||!UUID.test(b.operationId)||
@@ -53,7 +56,7 @@ function createPreferenceAuthority({supabaseUrl,anonKey,fetchImpl=fetch,automati
       (b.kind==='settings'?!validSettings(b.value):b.kind==='override'?!MODES.has(b.value):typeof b.value!=='boolean'))throw {status:400};
    return res.json({...await rpc(req,'honorpole_preferences_write_r1',{
     p_device:d,p_operation:b.operationId,p_generation:b.generation,p_revision:b.revision,p_kind:b.kind,p_value:b.value,
-   },d),automatic_movement_enabled:automaticMovementEnabled===true});
+   },d),automatic_movement_enabled:movementEnabledFor(d)});
   }),
  };
 }

@@ -34,7 +34,7 @@ test('enabled preference routes register authentication before handler',()=>{
  }
  assert.equal(h.routes.has('POST /handover/poll'),false);assert.equal(h.calls.length,0);
 });
-function response(){return {code:200,set(){return this},status(c){this.code=c;return this},json(d){this.body=d;return this}}}
+function response(){return {code:200,set(){return this},setHeader(){},status(c){this.code=c;return this},json(d){this.body=d;return this}}}
 test('enabled route rejects missing token before any RPC',async()=>{
  const h=boot({DEVICE_PREFERENCES_ENABLED:'true'});const res=response();
  await h.routes.get(prefGet)[0]({headers:{}},res,()=>assert.fail('unauthenticated next'));
@@ -47,4 +47,33 @@ test('enabled route passes authenticated context to preference RPC',async()=>{
  let next=false;await h.routes.get(prefGet)[0](req,res,()=>{next=true});assert.equal(next,true);
  await h.routes.get(prefGet)[1](req,res);assert.equal(res.code,200);assert.deepEqual(res.body,{...v,automatic_movement_enabled:false});
  assert.deepEqual(h.calls.map(c=>c.url.split('/').at(-1)),['user','honorpole_preferences_read_r1']);
+});
+
+
+test('both preference routes report the same device-specific bench scope', async () => {
+ const settings={
+  installation_zip:'80122',installation_city:'Fixture',installation_county:'Fixture',
+  installation_state:'Colorado',installation_state_code:'CO',installation_county_fips:'08005',
+  timezone:'America/Denver', latitude:39.58,longitude:-104.95,
+  sun_schedule_enabled:false,raise_at_sunrise:false,lower_at_sunset:false,
+  illuminated_at_night:false,auto_half_staff:true,enable_federal_alerts:true,
+  enable_state_alerts:true,enable_local_alerts:true,auto_apply_verified_directives:true,
+ };
+ const h=boot({DEVICE_PREFERENCES_ENABLED:'true',AUTO_PREFERENCE_COMMANDS_ENABLED:'false',
+  AUTO_PREFERENCE_BENCH_DEVICE_ID:'HP-002'},async (_url,init)=>{
+  const body=JSON.parse(init.body);
+  return {ok:true,json:async()=>({deviceId:body.p_device,generation:0,revision:3,
+   settings,override_mode:'DOWN',testmode:false})};
+ });
+ for(const deviceId of ['HP-001','HP-002']){
+  const req={params:{deviceId},query:{device_id:deviceId},accessToken:'fixture-user-token',
+   user:{id:'11111111-1111-4111-8111-111111111111'}};
+  for(const route of [prefGet,'GET /auto/preferences']){
+   const res=response();
+   await h.routes.get(route)[1](req,res);
+   assert.equal(res.code,200);
+   assert.equal(res.body.deviceId,deviceId);
+   assert.equal(res.body.automatic_movement_enabled,deviceId==='HP-002');
+  }
+ }
 });

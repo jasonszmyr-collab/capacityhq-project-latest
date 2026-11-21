@@ -18,13 +18,13 @@ function boot(flags={},fetchOverride){
       throw Error('Blocked dependency '+n);
     }};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../server.cjs'),'utf8')+'\nglobalThis.testAPI={queueCommand,checkQueuedAuthority,commandsByDevice};',context);
-  return {routes,calls,api:context.testAPI};
+  return {routes,calls,api:context.testAPI,env:context.process.env};
 }
 
 
-function fixture(){
+function fixture(flags={}){
  let revision=7;let outage=false;
- const h=boot({DEVICE_PREFERENCES_ENABLED:'true',AUTO_PREFERENCE_COMMANDS_ENABLED:'true',HANDOVER_GATES_ENABLED:'true',SUPABASE_ANON_KEY:'fixture-anon'},async(url,init)=>{
+ const h=boot({DEVICE_PREFERENCES_ENABLED:'true',AUTO_PREFERENCE_COMMANDS_ENABLED:'true',HANDOVER_GATES_ENABLED:'true',SUPABASE_ANON_KEY:'fixture-anon',...flags},async(url,init)=>{
   const b=JSON.parse(init.body||'{}');
   if(url.endsWith('honorpole_preferences_auto_check_r1')){
    if(outage)throw Error('unavailable');
@@ -67,4 +67,48 @@ test('new preference authority does not implicitly activate automatic movement',
  const h=boot({DEVICE_PREFERENCES_ENABLED:'true'});
  const r=await h.api.queueCommand('HP-002','FULL','AUTO',{kind:'auto',preferences:{generation:0,revision:7}});
  assert.equal(r.denied,true);assert.equal(r.status,503);assert.equal(h.calls.length,0);
+});
+
+
+const benchAuthority = {kind:'auto', preferences:{generation:0, revision:7}};
+
+test('bench scope permits only HP-002 with the service-wide switch off', async () => {
+ const h=fixture({AUTO_PREFERENCE_COMMANDS_ENABLED:'false', AUTO_PREFERENCE_BENCH_DEVICE_ID:'HP-002'});
+ const denied=await h.api.queueCommand('HP-001','FULL','AUTO',benchAuthority);
+ assert.equal(denied.status,503);
+ assert.equal(h.calls.length,0);
+ assert.equal(h.api.commandsByDevice.has('HP-001'),false);
+ const allowed=await h.api.queueCommand('HP-002','FULL','AUTO',benchAuthority);
+ assert.ok(allowed.commandId);
+ const record=h.api.commandsByDevice.get('HP-002');
+ assert.equal(await h.api.checkQueuedAuthority(record,'HP-002'),200);
+ delete h.env.AUTO_PREFERENCE_BENCH_DEVICE_ID;
+ assert.equal(await h.api.checkQueuedAuthority(record,'HP-002'),409);
+});
+
+test('explicit bench scope limits movement even if the service-wide switch is on', async () => {
+ const h=fixture({AUTO_PREFERENCE_BENCH_DEVICE_ID:'HP-002'});
+ const denied=await h.api.queueCommand('HP-001','FULL','AUTO',benchAuthority);
+ assert.equal(denied.status,503);
+ const stop=await h.api.queueCommand('HP-001','STOP','AUTO',{kind:'auto'});
+ assert.equal(stop.motor,'STOP');
+ assert.equal(h.calls.length,0);
+});
+
+test('invalid bench scope never falls back to the service-wide switch', async () => {
+ for(const scope of ['', 'HP-000', 'HP-002,HP-001']){
+  const h=fixture({AUTO_PREFERENCE_BENCH_DEVICE_ID:scope});
+  const result=await h.api.queueCommand('HP-002','FULL','AUTO',benchAuthority);
+  assert.equal(result.status,503);
+  assert.equal(h.api.commandsByDevice.size,0);
+  assert.equal(h.calls.length,0);
+ }
+});
+
+test('bench scope cannot enable legacy AUTO without preference authority', async () => {
+ const h=boot({DEVICE_PREFERENCES_ENABLED:'false',AUTO_PREFERENCE_BENCH_DEVICE_ID:'HP-002'});
+ const denied=await h.api.queueCommand('HP-002','FULL','AUTO',{kind:'auto'});
+ assert.equal(denied.status,503);
+ assert.equal(h.api.commandsByDevice.size,0);
+ assert.equal(h.calls.length,0);
 });

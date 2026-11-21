@@ -175,12 +175,19 @@ const preferencesAuto = process.env.DEVICE_PREFERENCES_ENABLED === "true"
   ? require("./preference-auto.cjs").createPreferenceAuto({supabaseUrl: SUPABASE_URL,
       serviceKey: SUPABASE_SERVICE_ROLE_KEY, fetchImpl: (...args) => fetch(...args)}) : null;
 
+function automaticMovementEnabledForDevice(deviceId) {
+  const benchDevice = process.env.AUTO_PREFERENCE_BENCH_DEVICE_ID;
+  if (benchDevice === undefined) return process.env.AUTO_PREFERENCE_COMMANDS_ENABLED === "true";
+  // An invalid explicit scope disables AUTO rather than falling back to service-wide movement.
+  return /^HP-[0-9]{3,6}$/.test(benchDevice) && Number(benchDevice.slice(3)) > 0 && deviceId === benchDevice;
+}
+
 // Versioned preferences: adopted only through the separately reviewed cutover.
 // Default OFF; enabling this alone does not make handover or AUTO ready.
 if (process.env.DEVICE_PREFERENCES_ENABLED === "true") {
   const preferences = require("./preference-authority.cjs").createPreferenceAuthority({
     supabaseUrl: SUPABASE_URL, anonKey: process.env.SUPABASE_ANON_KEY || "",
-    automaticMovementEnabled: process.env.AUTO_PREFERENCE_COMMANDS_ENABLED === "true",
+    automaticMovementEnabled: automaticMovementEnabledForDevice,
     fetchImpl: (...args) => fetch(...args)
   });
   app.get("/api/device/:deviceId/preferences", requireSupabaseAuth, preferences.get);
@@ -648,9 +655,10 @@ async function queueCommand(deviceId, command, source = "MANUAL", authority) {
     return null;
   }
 
-  if (!preferencesAuto && authority?.kind === "auto" && authority.preferences !== undefined && motor !== "STOP")
+  if (!preferencesAuto && authority?.kind === "auto" && motor !== "STOP" &&
+      (authority.preferences !== undefined || process.env.AUTO_PREFERENCE_BENCH_DEVICE_ID !== undefined))
     return {denied:true,status:503,error:"Versioned AUTO preferences are unavailable"};
-  if (preferencesAuto && authority?.kind === "auto" && motor !== "STOP" && process.env.AUTO_PREFERENCE_COMMANDS_ENABLED !== "true")
+  if (preferencesAuto && authority?.kind === "auto" && motor !== "STOP" && !automaticMovementEnabledForDevice(targetDeviceId))
     return {denied:true,status:503,error:"Automatic movement is not enabled"};
   if (preferencesAuto && authority?.kind === "auto" && motor !== "STOP") {
     const beforePreferences = commandsByDevice.get(targetDeviceId);
@@ -745,7 +753,7 @@ app.get("/auto/preferences", requireAutoControlAuth, async (req, res) => {
   if(!preferencesAuto)return res.status(503).json({error:"Device preferences unavailable"});
   const result=await preferencesAuto.read(d);
   if(result.status!==200)return res.status(result.status).json({error:"Device preferences unavailable"});
-  return res.json({...result.value,automatic_movement_enabled:process.env.AUTO_PREFERENCE_COMMANDS_ENABLED === "true"});
+  return res.json({...result.value,automatic_movement_enabled:automaticMovementEnabledForDevice(d)});
 });
 app.get("/auto/status", requireAutoControlAuth, (req, res) => {
   const deviceId = typeof req.query.device_id === "string"
@@ -999,8 +1007,9 @@ async function checkQueuedAuthority(record, deviceId) {
   const authority=queuedAuthority.get(record);
   const status=await checkActorAuthority(authority, deviceId);
   if(status!==200)return status;
+  if (authority?.kind === "auto" && process.env.AUTO_PREFERENCE_BENCH_DEVICE_ID !== undefined && !preferencesAuto) return 409;
   if(preferencesAuto && authority?.kind === "auto") {
-    if(process.env.AUTO_PREFERENCE_COMMANDS_ENABLED !== "true")return 409;
+    if (!automaticMovementEnabledForDevice(deviceId)) return 409;
     const currentPreferences=await preferencesAuto.check(deviceId,authority.preferences);
     if(currentPreferences.status!==200)return currentPreferences.status;
   }
